@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "research-locus",
+  "version": "0.1.1",
+  "description": "Researcher-directed scientific co-review: inspect claims and evidence, challenge findings, revise scope, and retain decisions without inflating evidence.",
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

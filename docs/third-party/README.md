@@ -1,0 +1,1 @@
+`cfworker-LICENSE` is retained from https://raw.githubusercontent.com/cfworker/cfworker/main/LICENSE.md (retrieved 2026-10-05), the official repository of @cfworker/json-schema 4.1.1. Its npm archive declares MIT but does not include the license file. All other runtime dependency notices are collected from their installed locked package versions by scripts/build-marketplace.mjs.

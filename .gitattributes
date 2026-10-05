@@ -1,0 +1,5 @@
+* text=auto
+# Preserve verified build bytes across Windows/macOS/Linux clones.
+plugins/research-locus/dist/** -text whitespace=-blank-at-eol
+plugins/research-locus/scripts/launch.mjs -text
+plugins/research-locus/THIRD_PARTY_NOTICES.txt whitespace=-blank-at-eol

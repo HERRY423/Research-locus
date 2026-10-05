@@ -1,0 +1,11 @@
+{
+  "version": "0.1.1",
+  "node": ">=22",
+  "runtimeDependencyInstallRequired": false,
+  "nativeHostAcceptance": "NOT_RUN",
+  "sha256": {
+    "dist/server.js": "2dda35f8666c43a99bccbdcade8874d169032ee5046ab174fef8346f8e9f0a74",
+    "dist/app.html": "c60332da9bc138c078da57db4ad6d6617e4ccbb22603890e4c2bc7cb3b2ffed8",
+    "scripts/launch.mjs": "2233614567cfe1b4fc2bc1a0707cd42d31b3b3443f35d2aef9e336a2337a818d"
+  }
+}

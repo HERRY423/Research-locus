@@ -1,0 +1,32 @@
+{
+  "name": "research-locus",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Researcher-directed scientific co-review MCP Extension",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts --http",
+    "start": "node scripts/launch.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "build:marketplace": "node scripts/build-marketplace.mjs",
+    "smoke:marketplace": "node scripts/verify-marketplace.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@openai/mcp-extensions": "0.1.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "tsx": "^4.20.0",
+    "esbuild": "^0.25.0"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.locus/
+artifacts/
+.stdio-smoke-*/
+.env
+.env.*
+*.log
+!plugins/research-locus/dist/
+!plugins/research-locus/dist/**

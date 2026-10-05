@@ -1,0 +1,10 @@
+import { build } from 'esbuild';
+import { mkdir, writeFile } from 'node:fs/promises';
+await mkdir('dist', { recursive: true });
+const app = await build({ entryPoints: ['src/app.ts'], bundle: true, platform: 'browser', format: 'esm', target: 'es2022', outdir: 'dist/web', write: false, minify: true });
+const js = app.outputFiles.find(f => f.path.endsWith('.js')).text;
+const css = app.outputFiles.find(f => f.path.endsWith('.css'))?.text ?? '';
+const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="locus-ui-token" content="__LOCUS_UI_TOKEN__"><title>Research Locus · 科研共审台</title><style>${css}</style></head><body><div id="app"></div><script type="module">${js.replaceAll('</script', '<\\/script')}</script></body></html>`;
+await writeFile('dist/app.html', html);
+await build({ entryPoints: ['src/server.ts'], bundle: true, platform: 'node', format: 'esm', target: 'node22', packages: 'external', outfile: 'dist/server.js' });
+console.log('Built MCP server and self-contained workbench UI.');
