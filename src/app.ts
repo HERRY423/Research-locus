@@ -2,6 +2,12 @@ import { createBridge, type Bridge, type PickedFile } from './bridge.js';
 import type { ReviewState } from './domain.js';
 import type { CatalogState } from './catalog.js';
 import { buildReplaySteps, diffLines, type ReplayStep } from './replay.js';
+import type { ReviewMode, ReviewRun } from './review-runs.js';
+import { currentMetadataReview, metadataLabels, summarizeChecks, type ClaimMetadata, type RuleOutcome } from './metadata-review.js';
+import { declaredCard, describeValue, designFields, designKeys, NOT_DECLARED, undeclared, type DesignField } from './design-fields.js';
+import { evidencePlan } from './evidence-plan.js';
+import { proposalAvailability } from './revision-proposals.js';
+import { buildBioNexusReceipt, buildDoiInput, buildGenericReceipt, evidenceIntakeForms, evidenceIntakeSummary, evidenceRecordView, type IntakeFileGroups } from './evidence-intake-ui.js';
 import './app.css';
 
 type Section = 'review' | 'resources' | 'history' | 'replay' | 'project';
@@ -34,7 +40,9 @@ const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ 
 const scopeNames: Record<string, string> = { sample: '样本内观察', cohort: '队列层面', population: '人群外推', causal: '因果结论' };
 const categoryNames: Record<string, string> = { design: '研究设计', claim_scope: '结论边界', provenance: '来源追溯', other: '其他' };
 const decisionNames: Record<string, string> = { challenge: '质疑建议', dismiss: '驳回建议', defer: '暂缓决定', accept_with_limits: '附条件采纳' };
-const actionNames: Record<string, string> = { pause: '暂停共审', resume: '恢复共审', run_review: '运行规则检查', intervene: '研究者介入', revise_claim: '修订论断', attach_evidence: '添加证据', create_claim: '添加论断', fixture_created: '创建合成示例', workspace_created: '创建空白会话', add_finding: 'Agent 提交建议', created: '创建工作区', initialized: '初始化演示', review_started: '规则检查', claim_revised: '修订论断', evidence_attached: '添加证据', intervention: '研究者介入' };
+const relationNames = { supports: '支持', depends_on: '依赖', contradicts: '矛盾' };
+const evidenceCategoryNames: Record<string, string> = { source: '原始来源', design: '研究设计', analysis: '分析方法', replication: '独立重复', causal: '因果识别', provenance: '来源追溯', validation: '独立验证', other: '其他证据' };
+const actionNames: Record<string, string> = { import_computational_receipt: '导入计算回执', record_doi_verification: '记录 DOI 核验', add_claim_relation: '连接论断', remove_claim_relation: '移除论断关系', set_claim_disposition: '处理论断', acknowledge_re_review: '记录局部重审', apply_revision_proposal: '采纳修订提案', link_evidence_requirement: '关联补证材料', propose_design: '提交设计候选', confirm_design: '确认设计候选', pause: '暂停共审', resume: '恢复共审', run_review: '运行规则检查', intervene: '研究者介入', revise_claim: '修订论断', attach_evidence: '添加证据', create_claim: '添加论断', fixture_created: '创建合成示例', workspace_created: '创建空白会话', add_finding: 'Agent 提交建议', created: '创建工作区', initialized: '初始化演示', review_started: '规则检查', claim_revised: '修订论断', evidence_attached: '添加证据', intervention: '研究者介入' };
 
 let bridge: Bridge;
 let state: ReviewState | null = null;
@@ -67,9 +75,13 @@ let replaySteps: ReplayStep[] = [];
 let replayTimer: ReturnType<typeof setInterval> | null = null;
 let replayGeneration = 0;
 const formDrafts = new Map<string, Record<string, string>>();
+const intakeFileDrafts = new Map<string, IntakeFileGroups>();
 const expandedDetails = new Map<string, boolean>();
 const selectedResources = new Map<string, Set<string>>();
 const root = document.querySelector<HTMLDivElement>('#app') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'app' }));
+const feedbackAnnouncement = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'sr-only' }));
+feedbackAnnouncement.setAttribute('role', 'status');
+feedbackAnnouncement.setAttribute('aria-live', 'polite');
 
 const currentClaim = () => state?.claims.find(c => c.id === selectedClaimId);
 const claimFindings = (id: string) => state?.findings.filter(f => f.claimId === id) ?? [];
@@ -83,7 +95,7 @@ function reconcileSelection() {
   if (!state) return;
   if (!state.claims.some(c => c.id === selectedClaimId)) selectedClaimId = state.claims[0]?.id ?? '';
   const selectedFinding = claimFindings(selectedClaimId).find(f => f.id === selectedFindingId);
-  if (!selectedFinding || (selectedFinding.status === 'stale' && activeFindings(selectedClaimId).length)) selectedFindingId = activeFindings(selectedClaimId)[0]?.id ?? claimFindings(selectedClaimId)[0]?.id ?? '';
+  if (!selectedFinding || (selectedFinding.status === 'stale' && !proposalAvailability(state,selectedFinding).available && activeFindings(selectedClaimId).length)) selectedFindingId = activeFindings(selectedClaimId)[0]?.id ?? claimFindings(selectedClaimId)[0]?.id ?? '';
   const validResources = new Set(state.resources.map(r => r.id));
   for (const set of selectedResources.values()) for (const id of set) if (!validResources.has(id)) set.delete(id);
 }
@@ -103,8 +115,11 @@ function captureDrafts() {
   for (const form of root.querySelectorAll<HTMLFormElement>('form[data-draft-key]')) {
     if (form.querySelector('fieldset:disabled')) continue;
     const values: Record<string, string> = {};
+    const files: IntakeFileGroups = {};
+    for (const input of form.querySelectorAll<HTMLInputElement>('input[type="file"][name]')) files[input.name] = [...(input.files ?? [])];
+    if (Object.keys(files).length) intakeFileDrafts.set(formDraftKey(form), files);
     for (const [key, value] of new FormData(form)) if (typeof value === 'string') values[key] = value;
-    if (form.id === 'revise-form' && values.text === values.baselineText && values.scope === values.baselineScope && !values.rationale?.trim()) { formDrafts.delete(formDraftKey(form)); continue; }
+    if (form.id === 'revise-form' && values.text === values.baselineText && values.scope === values.baselineScope && metadataSignature(metadataFromValues(values)) === values.baselineMetadata && !values.rationale?.trim()) { formDrafts.delete(formDraftKey(form)); continue; }
     formDrafts.set(formDraftKey(form), values);
   }
 }
@@ -112,13 +127,27 @@ function restoreDrafts() {
   for (const form of root.querySelectorAll<HTMLFormElement>('form[data-draft-key]')) {
     form.dataset.sessionId = activeSessionId;
     const values = formDrafts.get(formDraftKey(form));
+    const files = intakeFileDrafts.get(formDraftKey(form));
+    for (const input of form.querySelectorAll<HTMLInputElement>('input[type="file"][name]')) {
+      const selected = files?.[input.name] ?? [];
+      if (selected.length) { const transfer = new DataTransfer(); selected.forEach(file => transfer.items.add(file)); input.files = transfer.files; }
+      const label = form.querySelector<HTMLElement>(`[data-files-label="${CSS.escape(input.name)}"]`);
+      if (label) label.textContent = selected.length ? `${selected.length} 个文件 · ${selected.map(file => file.name).join('、')}` : '尚未选择';
+    }
     if (!values) continue;
     for (const element of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[name]')) {
+      if (element instanceof HTMLInputElement && element.type === 'file') continue;
+      if (element instanceof HTMLInputElement && element.type === 'checkbox') { element.checked = element.name in values; continue; }
       if (!(element.name in values)) continue;
       if (element instanceof HTMLInputElement && element.type === 'radio') element.checked = element.value === values[element.name];
       else element.value = values[element.name];
     }
     const decision = form.querySelector<HTMLInputElement>('input[name="decision"]:checked');
+    const applicability = form.querySelector<HTMLSelectElement>('[name="meta_figureApplicable"]');
+    const matched = form.querySelector<HTMLSelectElement>('[name="meta_figureSourceMatched"]');
+    if (matched) { matched.disabled = applicability?.value === 'false'; if (matched.disabled) matched.value = NOT_DECLARED; }
+    const numberInput = form.querySelector<HTMLInputElement>('[name="meta_biologicalReplicates"]');
+    if (numberInput) { numberInput.disabled = values.meta_biologicalReplicates_status !== 'known'; numberInput.required = !numberInput.disabled; }
     const field = form.querySelector<HTMLElement>('#conditions-field');
     const conditions = form.querySelector<HTMLTextAreaElement>('#decision-conditions');
     if (field) field.hidden = decision?.value !== 'accept_with_limits';
@@ -147,7 +176,130 @@ async function act(action: unknown, message: string) {
   return saved;
 }
 function severityLabel(severity: Finding['severity']) { return severity === 'critical' ? '优先处理' : severity === 'warning' ? '需要核对' : '供参考'; }
-function evidenceLabel(resource: Resource) { return resource.sourceKind === 'synthetic_fixture' ? '合成示例' : resource.sourceKind === 'host_resource' ? '宿主资源' : '研究者上传'; }
+function metadataSignature(metadata: ClaimMetadata) { return JSON.stringify(Object.fromEntries(Object.entries(declaredCard(metadata)).sort(([a], [b]) => a.localeCompare(b)))); }
+function metadataFromValues(values: Record<string, string>): ClaimMetadata {
+  const metadata: Record<string,unknown> = {};
+  for (const key of designKeys) {
+    const value = values[`meta_${key}`];
+    metadata[key] = designFields[key].kind === 'number' ? (values[`meta_${key}_status`] === 'known' && value?.trim() ? Number(value) : NOT_DECLARED) : !value || value === NOT_DECLARED ? NOT_DECLARED : value === 'true' ? true : value === 'false' ? false : value;
+  }
+  if (metadata.figureApplicable === false) metadata.figureSourceMatched = NOT_DECLARED;
+  if (values.meta_basis?.trim()) metadata.basis = values.meta_basis.trim();
+  return metadata as ClaimMetadata;
+}
+function metadataFields(metadata: ClaimMetadata = {}, prefix: string) {
+  const field = (key: DesignField) => {
+    const known = !undeclared(metadata[key]);
+    if (designFields[key].kind === 'number') return `<div><label for="${prefix}-${key}-status">${metadataLabels[key]} · 声明状态</label><select id="${prefix}-${key}-status" name="meta_${key}_status" required><option value="NOT_DECLARED" ${!known ? 'selected' : ''}>NOT_DECLARED（未声明）</option><option value="known" ${known ? 'selected' : ''}>已知，请填写</option></select><label for="${prefix}-${key}">${metadataLabels[key]}</label><input id="${prefix}-${key}" name="meta_${key}" type="number" min="0" max="1000000" step="1" value="${known ? esc(metadata[key]) : ''}" ${known ? 'required' : 'disabled'} placeholder="填写独立生物重复，不是细胞数"></div>`;
+    const options = key === 'analysisUnit' ? [['cell','细胞'],['donor','供体／个体'],['sample','独立样本'],['other','其他（需解释）']] : [['true','是'],['false','否']];
+    return `<div><label for="${prefix}-${key}">${metadataLabels[key]}</label><select id="${prefix}-${key}" name="meta_${key}" required ${key === 'figureSourceMatched' && metadata.figureApplicable === false ? 'disabled' : ''}>${[[NOT_DECLARED,'NOT_DECLARED（未声明）'],...options].map(([value,label]) => `<option value="${value}" ${String(metadata[key] ?? NOT_DECLARED) === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>`;
+  };
+  return `<fieldset class="metadata-fields"><legend>研究设计卡 · 必填确认</legend><p class="form-help">逐项声明已知信息；无法确认时明确保留 NOT_DECLARED。不得把“材料未提到”当成“否”。卡片必须核对，未知项仍可保存并进入补充流程。</p><div class="metadata-grid">${designKeys.slice(0,5).map(field).join('')}</div><details data-details-key="extended:${prefix}"><summary>更多设计声明 · 多重检验、批次、措辞、阈值与验证</summary><div class="metadata-grid">${designKeys.slice(5).map(field).join('')}</div></details><label for="${prefix}-basis">信息依据与定位（可选）</label><textarea id="${prefix}-basis" name="meta_basis" rows="2" maxlength="2000">${esc(metadata.basis ?? '')}</textarea><label class="design-ack"><input name="design_ack" type="checkbox" required value="checked">我已核对研究设计卡；未能确认的项目保留 NOT_DECLARED</label></fieldset>`;
+}
+function designCardView(claim: Claim) {
+  const unknown = designKeys.filter(key => undeclared(claim.metadata[key]));
+  const proposals = state?.designProposals?.filter(p => p.claimId === claim.id) ?? [];
+  return `<section class="design-card" aria-label="研究设计卡"><div class="section-title"><h3>研究设计卡</h3><button class="text-button" data-action="edit-metadata">填写／修订</button></div><p>${unknown.length ? `${unknown.length} 项 NOT_DECLARED（含可能不适用的字段）；请按规则报告核对适用性与缺口。` : '各字段已声明；仍需独立核验。'}</p><dl>${designKeys.slice(0,5).map(key => `<div><dt>${metadataLabels[key]}</dt><dd>${claim.metadata.figureApplicable === false && key === 'figureSourceMatched' ? '不适用' : esc(describeValue(key,claim.metadata[key]))}</dd></div>`).join('')}</dl><button class="button" data-action="extract-design" ${busy || bridge?.mode !== 'host' || state?.reviewStatus === 'paused' || pendingRun() ? 'disabled' : ''}>从所选证据提取设计候选</button><p class="form-help">在「证据文件」中勾选材料。宿主 Agent 只提交候选；逐项确认后才写入。${bridge?.mode === 'local' ? '本地预览未连接宿主 Agent。' : ''}</p>${proposals.slice().reverse().map(p => p.status === 'proposed' ? `<form class="design-proposal" data-proposal-id="${esc(p.id)}" data-draft-key="design:${esc(p.id)}"><h4>待确认的设计候选</h4><p>摘录只核对原文是否存在，不证明解释正确。默认不采纳任何字段。</p>${p.candidates.map(candidate => `<div class="candidate"><label><input type="checkbox" name="select_${candidate.field}" value="${candidate.field}"><strong>${metadataLabels[candidate.field]}</strong>：${esc(describeValue(candidate.field,claim.metadata[candidate.field]))} → ${esc(describeValue(candidate.field,candidate.value))}</label><p>${esc(candidate.rationale)}</p>${candidate.evidence.map(cite => `<blockquote>${esc(cite.quote)}<footer>${esc(state?.resources.find(r => r.id === cite.resourceId)?.name ?? cite.resourceId)} · ${esc(cite.locator)}</footer></blockquote>`).join('') || '<p>所选材料未支持确定值；保持 NOT_DECLARED。</p>'}</div>`).join('')}<label>确认或驳回理由<textarea name="rationale" required maxlength="5000" rows="2"></textarea></label><button type="submit" class="button button-primary" ${busy ? 'disabled' : ''}>确认选中字段（不勾选则全部驳回）</button></form>` : `<details data-details-key="proposal:${esc(p.id)}"><summary>提取候选历史 · ${{ confirmed:'已确认', rejected:'已驳回', stale:'材料已变化，已过期' }[p.status]}</summary><p>当时选中：${p.selectedFields?.map(key => metadataLabels[key]).join('、') || '无'}</p>${p.candidates.map(candidate => `<div class="candidate"><p><strong>${metadataLabels[candidate.field]}</strong>：${esc(describeValue(candidate.field,candidate.value))} · ${p.selectedFields?.includes(candidate.field) ? '当时已采纳' : '未采纳'}</p><p>${esc(candidate.rationale)}</p>${candidate.evidence.map(cite => `<blockquote>${esc(cite.quote)}<footer>${esc(state?.resources.find(r => r.id === cite.resourceId)?.name ?? cite.resourceId)} · ${esc(cite.locator)}（确认时材料）</footer></blockquote>`).join('')}</div>`).join('')}</details>`).join('')}</section>`;
+}
+const outcomeNames: Record<RuleOutcome, string> = { flagged: '发现风险', needs_input: '信息不足', no_signal: '未触发本规则', not_applicable: '不适用' };
+function metadataReviewView(claim: Claim) {
+  const report = state && currentMetadataReview(state,claim.id);
+  const checks = report?.checks.filter(check => check.claimId === claim.id);
+  return `<section class="metadata-review" aria-label="内置规则检查报告"><div class="section-title"><h3>内置规则检查</h3><button class="text-button" data-action="edit-metadata">补充审查信息</button></div>${checks ? `<p class="form-help">依据已填声明 · 检查版本 ${report!.revision} · ${esc(report!.rulesVersion)}。未触发不等于科学通过。</p><div class="rule-check-list">${checks.map(check => `<details class="rule-check ${check.outcome}" data-details-key="rule:${report!.revision}:${esc(claim.id)}:${check.ruleId}" ${check.outcome === 'needs_input' ? 'open' : ''}><summary><strong>${esc(check.title)}</strong><span>${outcomeNames[check.outcome]}${check.declarationStatus === 'NOT_DECLARED' ? ' · NOT_DECLARED' : ''}</span></summary><p>${esc(check.rationale)}</p>${check.missingFields.length ? `<p class="rule-missing">待补充：${check.missingFields.map(key => metadataLabels[key]).join('、')}</p>` : ''}${check.nextStep ? `<p>下一步：${esc(check.nextStep)}</p>` : ''}${check.limitation ? `<p class="form-help">适用领域：${esc(check.disciplines?.join('、'))}<br>局限：${esc(check.limitation)}</p>` : ''}</details>`).join('')}</div>${claim.metadata.basis ? `<p class="metadata-basis">声明依据（未独立核验）：${esc(claim.metadata.basis)}</p>` : '<p class="form-help">手填依据未提供；如已确认提取候选，可展开「提取候选历史」查看原始摘录。</p>'}` : '<div class="muted-box">当前版本尚无有效检查报告。填写已知审查信息后点击「运行检查」；未知信息会列出具体补充项。</div>'}</section>`;
+}
+const phaseNames: Record<ReviewRun['phase'], string> = { queued: '等待 ChatGPT 确认', working: '正在复核', needs_input: '需要你补充', completed: '复核已结束 · 待研究者判断', failed: '复核未完成', cancelled: '已结束等待', stale: '材料已更新 · 需要重审' };
+function localReviewView(claim: Claim) {
+  const pending = state?.reReview?.filter(flag => flag.claimId === claim.id && flag.status === 'pending') ?? [];
+  const rejected = claim.disposition === 'rejected';
+  return `${rejected ? '<div class="claim-disposition-banner">研究者已驳回这项论断。它仍保留在证据与修订历史中。</div>' : ''}${pending.length ? `<section class="local-review-notice" aria-label="局部重审"><h3>需要局部重审</h3><p>以下前提发生变化；本论断需要重新核对。</p><ul>${pending.map(flag => `<li><button class="text-button" data-action="claim" data-id="${esc(flag.sourceClaimId)}">${esc(state?.claims.find(c => c.id === flag.sourceClaimId)?.text ?? flag.sourceClaimId)}</button><p>${esc(flag.reason)}</p></li>`).join('')}</ul><form id="acknowledge-review-form" data-draft-key="acknowledge:${esc(claim.id)}"><label>重审记录<textarea name="rationale" rows="2" maxlength="5000" required placeholder="说明你如何核对变化后的前提，以及剩余问题。"></textarea></label><button type="submit" class="button" ${busy ? 'disabled' : ''}>记录已重审</button></form><p class="form-help">此记录只清除待重审标记，不会把证据上限升级为科学通过。</p></section>` : ''}`;
+}
+function claimGraphView(claim: Claim) {
+  if (!state) return '';
+  const claims = state.claims;
+  const relations = state.claimRelations ?? [];
+  const positions = new Map(claims.map((item, index) => [item.id, { x: 18 + (index % 3) * 194, y: 22 + Math.floor(index / 3) * 110 }]));
+  const short = (value: string) => [...value].length > 14 ? [...value].slice(0,14).join('') + '…' : value;
+  const rows = relations.filter(relation => relation.sourceClaimId === claim.id || relation.targetClaimId === claim.id);
+  const options = (selected: string) => claims.map(item => `<option value="${esc(item.id)}" ${item.id === selected ? 'selected' : ''}>${esc(item.text)}</option>`).join('');
+  const paths = relations.map(relation => {
+    const source = positions.get(relation.sourceClaimId), target = positions.get(relation.targetClaimId);
+    if (!source || !target) return '';
+    let path: string;
+    if (source.y === target.y) {
+      const right = target.x > source.x;
+      const sx = source.x + (right ? 164 : -2), tx = target.x + (right ? -3 : 165), y = source.y + 30;
+      const offset = (tx - sx) / 2;
+      path = `M ${sx} ${y} C ${sx + offset} ${y}, ${tx - offset} ${y}, ${tx} ${y}`;
+    } else {
+      const down = target.y > source.y;
+      const sx = source.x + 81, sy = source.y + (down ? 62 : -2), tx = target.x + 81, ty = target.y + (down ? -3 : 63);
+      const offset = (ty - sy) / 2;
+      path = `M ${sx} ${sy} C ${sx} ${sy + offset}, ${tx} ${ty - offset}, ${tx} ${ty}`;
+    }
+    return `<path class="graph-edge ${relation.kind}" d="${path}" marker-end="url(#claim-edge-arrow)"><title>${esc(`${claims.find(c => c.id === relation.sourceClaimId)?.text} → ${relationNames[relation.kind]} → ${claims.find(c => c.id === relation.targetClaimId)?.text}`)}</title></path>`;
+  }).join('');
+  const nodes = claims.map(item => {
+    const position = positions.get(item.id)!;
+    const pending = state?.reReview?.some(flag => flag.claimId === item.id && flag.status === 'pending');
+    const status = item.disposition === 'rejected' ? '已驳回' : pending ? '需要重审' : '待独立评估';
+    return `<g class="graph-node ${item.id === claim.id ? 'selected' : ''} ${pending ? 'needs-review' : ''}" transform="translate(${position.x} ${position.y})" data-action="claim" data-id="${esc(item.id)}" role="button" tabindex="0" aria-label="打开论断：${esc(item.text)}；${status}" aria-pressed="${item.id === claim.id}"><title>${esc(item.text)} · ${status}</title><rect width="162" height="60" rx="6"/><text x="10" y="23">${esc(short(item.text))}</text><text class="graph-node-status" x="10" y="44">${status}</text></g>`;
+  }).join('');
+  return `<section class="claim-graph-section" aria-label="论断依赖图"><details data-details-key="graph:${esc(claim.id)}" ${relations.length ? 'open' : ''}><summary><strong>论断依赖图</strong><span>${claims.length} 个论断 · ${relations.length} 条关系</span></summary><p class="form-help">箭头从前提指向下游；「依赖」表示后者依赖前者。只有依赖关系传播局部重审；支持与矛盾关系用于对照。</p><div class="graph-legend"><span class="depends_on">依赖</span><span class="supports">支持</span><span class="contradicts">矛盾</span></div><div class="claim-graph-scroll"><svg class="claim-graph" viewBox="0 0 584 ${Math.max(115,Math.ceil(claims.length / 3) * 110 + 18)}" aria-label="可点击论断关系图"><defs><marker id="claim-edge-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/></marker></defs>${paths}${nodes}</svg></div><div class="claim-relations">${rows.length ? rows.map(relation => `<article><p><button class="text-button" data-action="claim" data-id="${esc(relation.sourceClaimId)}">${esc(claims.find(c => c.id === relation.sourceClaimId)?.text)}</button><span class="relation-arrow">→ ${relationNames[relation.kind]} →</span><button class="text-button" data-action="claim" data-id="${esc(relation.targetClaimId)}">${esc(claims.find(c => c.id === relation.targetClaimId)?.text)}</button></p><p class="form-help">${esc(relation.rationale)}</p><details data-details-key="remove-relation:${esc(relation.id)}"><summary>移除这条关系</summary><form class="remove-relation-form" data-relation-id="${esc(relation.id)}" data-draft-key="remove-relation:${esc(relation.id)}"><label>移除理由<textarea name="rationale" rows="2" required maxlength="5000"></textarea></label><button class="button button-small" type="submit" ${busy ? 'disabled' : ''}>移除关系</button></form></details></article>`).join('') : '<p class="form-help">当前论断尚未连接其他论断。</p>'}</div>${claims.length > 1 ? `<details data-details-key="add-relation:${esc(claim.id)}"><summary>连接两个论断</summary><form id="add-relation-form" data-draft-key="add-relation:${esc(claim.id)}"><div class="relation-fields"><label>前提论断<select name="sourceClaimId" required>${options(claim.id)}</select></label><label>关系<select name="kind" required><option value="depends_on">依赖：下游依赖前提</option><option value="supports">支持：前提支持下游</option><option value="contradicts">矛盾：两项论断冲突</option></select></label><label>下游论断<select name="targetClaimId" required>${options(claims.find(c => c.id !== claim.id)!.id)}</select></label></div><label>关系依据<textarea name="rationale" required rows="2" maxlength="5000" placeholder="说明为什么存在这条关系。"></textarea></label><button type="submit" class="button" ${busy ? 'disabled' : ''}>保存关系</button></form></details>` : '<p class="form-help">添加第二个论断后，即可建立关系。</p>'}</details><details class="claim-disposition" data-details-key="disposition:${esc(claim.id)}"><summary>${claim.disposition === 'rejected' ? '恢复使用这项论断' : '驳回这项论断'}</summary><p class="form-help">这是对论断本身的处理。右侧「驳回建议」只回应一条审查建议。驳回前提会让依赖它的下游论断进入待重审。</p><form id="claim-disposition-form" data-draft-key="disposition:${esc(claim.id)}"><input type="hidden" name="disposition" value="${claim.disposition === 'rejected' ? 'active' : 'rejected'}"><label>处理理由<textarea name="rationale" required maxlength="5000" rows="2"></textarea></label><button type="submit" class="button" ${busy ? 'disabled' : ''}>${claim.disposition === 'rejected' ? '恢复论断（仍待评估）' : '确认驳回论断'}</button></form></details></section>`;
+}
+function evidencePlanView(claim: Claim) {
+  if (!state) return '';
+  const items = evidencePlan(state,claim.id);
+  const names = { missing: '待补充', declared: '已有声明 · 待核验', provided: '已关联材料 · 待核验', needs_review: '需要重审' };
+  const origins = { baseline: '评估基础', rule: '规则提示', proposal: '已采纳提案', dependency: '依赖变化', receipt:'计算与引用回执' };
+  const resources = state.resources.filter(resource => claim.resourceIds.includes(resource.id));
+  const missing = items.filter(item => item.status === 'missing' || item.status === 'needs_review').length;
+  return `<section class="evidence-plan" aria-label="待补证据清单"><div class="section-title"><h3>缺什么证据 <span class="count">${missing}</span></h3><button class="text-button" data-action="attach" ${busy ? 'disabled' : ''}>添加证据</button></div><p class="form-help">要从 NOT_ASSESSED 进入正式评估，先明确下列材料与分析。关联材料只记录对应关系；清单齐全不会自动升级证据上限，也不会启动实验或分析。</p><div class="evidence-plan-items">${items.map(item => `<details class="evidence-plan-item ${item.status}" data-details-key="evidence-plan:${esc(claim.id)}:${esc(item.id)}"><summary><strong>${esc(item.title)}</strong><span>${names[item.status]}</span></summary><p>${esc(item.description)}</p><p class="small-label">${esc(evidenceCategoryNames[item.category] ?? item.category)} · ${origins[item.origin]}</p>${item.resourceIds.length ? `<div class="linked-evidence">${item.resourceIds.map(id => `<button class="text-button" data-action="preview" data-id="${esc(id)}">${icon('file')}${esc(state?.resources.find(resource => resource.id === id)?.name ?? id)}</button>`).join('')}</div>` : ''}${item.linkable ? resources.length ? `<form class="evidence-link-form" data-requirement-id="${esc(item.id)}" data-draft-key="evidence-link:${esc(claim.id)}:${esc(item.id)}"><fieldset ${busy ? 'disabled' : ''}><legend>关联能回答这项问题的现有证据</legend>${resources.map((resource,index) => `<label class="evidence-link-option"><input type="checkbox" name="link_${index}" value="${esc(resource.id)}" ${item.resourceIds.includes(resource.id) ? 'checked' : ''}>${esc(resource.name)}</label>`).join('')}<label>对应说明<textarea name="rationale" required rows="2" maxlength="5000" placeholder="说明材料中的位置与适用边界；取消全部勾选可清除关联。"></textarea></label><button class="button button-small" type="submit">保存材料关联</button></fieldset></form>` : '<p class="form-help">先添加证据文件，再为这项需求建立关联。</p>' : ''}</details>`).join('')}</div></section>`;
+}
+function revisionProposalView(finding: Finding) {
+  if (!state || !finding.revisionProposal) return '';
+  const proposal = finding.revisionProposal;
+  const available = proposalAvailability(state,finding);
+  const adoptions = state.revisionAdoptions?.filter(adoption => adoption.findingId === finding.id) ?? [];
+  const claim = state.claims.find(item => item.id === finding.claimId);
+  const hasText = proposal.text !== undefined, hasScope = proposal.scope !== undefined;
+  return `<section class="revision-proposal" aria-label="结构化修订提案"><h3>一起修订这项论断</h3><p>逐项采纳建议文字、范围或补证计划。默认不选中任何项。</p>${available.reason ? `<p class="inline-warning">${esc(available.reason)}</p>` : ''}<form id="revision-proposal-form" data-finding-id="${esc(finding.id)}" data-draft-key="revision-proposal:${esc(finding.id)}"><fieldset ${busy || !available.available ? 'disabled' : ''}>${hasText ? `<div class="proposal-part"><label><input type="checkbox" name="acceptText" ${!available.text ? 'disabled' : ''}><strong>采用建议文字</strong>${!available.text ? ' · 已处理或不可采纳' : ''}</label><p class="small-label">当前文字</p><p>${esc(claim?.text)}</p><p class="small-label">建议文字</p><p>${esc(proposal.text)}</p></div>` : ''}${hasScope ? `<div class="proposal-part"><label><input type="checkbox" name="acceptScope" ${!available.scope ? 'disabled' : ''}><strong>采用建议范围</strong>${!available.scope ? ' · 已处理或不可采纳' : ''}</label><p>${esc(scopeNames[claim?.scope ?? ''] ?? claim?.scope)} → ${esc(scopeNames[proposal.scope!] ?? proposal.scope)}</p></div>` : ''}${proposal.evidenceNeeds?.length ? `<div class="proposal-part"><strong>加入补证计划</strong>${proposal.evidenceNeeds.map((need,index) => `<label class="proposal-evidence-option"><input name="need_${index}" type="checkbox" value="${esc(need.id)}" ${!available.evidenceNeedIds.includes(need.id) ? 'disabled' : ''}><span>${esc(need.description)}<small>${esc(evidenceCategoryNames[need.category] ?? need.category)}${!available.evidenceNeedIds.includes(need.id) ? ' · 已处理或不可采纳' : ''}</small></span></label>`).join('')}</div>` : ''}<label>采纳理由<textarea name="rationale" rows="3" required maxlength="5000" placeholder="说明所选修改的依据与适用边界。"></textarea></label><button class="button button-primary" type="submit">采纳选中部分</button></fieldset></form><p class="form-help">未选中的项保留为候选。采纳计划不等于已获得证据；修订文字或范围后需重新审查。</p>${adoptions.length ? `<details data-details-key="adoptions:${esc(finding.id)}"><summary>已采纳记录 · ${adoptions.length} 次</summary>${adoptions.map(adoption => `<p><strong>版本 ${adoption.revision}</strong> · ${[adoption.acceptText ? '论断文字' : '',adoption.acceptScope ? '适用范围' : '',adoption.evidenceNeedIds.length ? `${adoption.evidenceNeedIds.length} 项补证计划` : ''].filter(Boolean).join('、')}</p><p>${esc(adoption.rationale)}</p>`).join('')}</details>` : ''}</section>`;
+}
+function selectedRun() { return bridge?.feedback().sessionId === activeSessionId ? bridge.feedback().runs.filter(run => run.claimId === selectedClaimId).at(-1) : undefined; }
+const pendingRun = () => { const run = selectedRun(); return run && ['queued', 'working', 'needs_input'].includes(run.phase); };
+function feedbackSummaryView() {
+  if (!bridge) return '';
+  const feedback = bridge.feedback(), run = selectedRun();
+  return `<div class="feedback-summary"><span class="connection-dot ${feedback.connection}" aria-hidden="true"></span><span>${esc(run ? `${phaseNames[run.phase]}：${run.message}` : feedback.message)}</span>${feedback.connection === 'retrying' && run ? '<strong>连接中断，进展可能过时</strong>' : ''}<button class="text-button" data-action="show-feedback">查看进展</button></div>`;
+}
+function feedbackView() {
+  if (!bridge) return '';
+  const feedback = bridge.feedback();
+  const run = selectedRun();
+  const seconds = run ? Math.max(0, Math.floor((Date.now() - Date.parse(run.updatedAt)) / 1000)) : 0;
+  return `<section class="review-feedback" aria-label="对话与复核进展"><div class="feedback-connection"><span class="connection-dot ${feedback.connection}" aria-hidden="true"></span><span>${esc(feedback.message)}</span><button class="text-button" data-action="refresh-feedback" ${busy ? 'disabled' : ''}>刷新</button></div>${run ? `<div class="feedback-heading"><strong>${esc(phaseNames[run.phase])}</strong><span>${seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分钟`}前更新</span></div><p>${esc(run.message)}</p><div class="feedback-meta">${run.resourceIds.length} 份选定证据 · ${run.findingIds.length} 项已保存发现</div>${pendingRun() && seconds >= 30 ? '<p class="feedback-wait">尚无新的进展报告。请查看聊天中的回复；页面不会把等待时间当作工作进度，也不会自动重发。</p>' : ''}${run.phase === 'needs_input' ? '<p class="feedback-wait">请在 ChatGPT 对话中回答上方问题。若需添加证据，请在页面添加后重新发起复核。</p>' : ''}${pendingRun() ? '<button class="text-button" data-action="cancel-review">结束等待</button>' : ''}<span class="feedback-boundary">进展由 Agent 报告；已保存的发现可在当前审查中查看。临时进展在服务重启后清空。</span>` : `<p>${bridge.mode === 'local' ? '本地预览可运行规则检查；定向复核需要在 ChatGPT 宿主中打开。' : '选择审查方式和证据后发起复核，处理进展会显示在这里。'}</p>`}</section>`;
+}
+function refreshFeedbackView() {
+  const run = selectedRun();
+  const announcement = page === 'workbench' && bridge ? `${bridge.feedback().message}${run ? `。${phaseNames[run.phase]}：${run.message}` : ''}` : '';
+  if (feedbackAnnouncement.textContent !== announcement) feedbackAnnouncement.textContent = announcement;
+  // Update only the status region: never replace an in-progress decision or IME input.
+  for (const slot of root.querySelectorAll<HTMLElement>('[data-feedback-slot]')) {
+    if (slot.contains(document.activeElement)) continue;
+    const html = feedbackView();
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+  }
+  for (const slot of root.querySelectorAll<HTMLElement>('[data-feedback-summary]')) {
+    if (slot.contains(document.activeElement)) continue;
+    const html = feedbackSummaryView();
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+  }
+  const button = root.querySelector<HTMLButtonElement>('[data-action="request-review"]');
+  if (button) button.disabled = busy || bridge?.mode !== 'host' || !currentClaim() || state?.reviewStatus === 'paused' || Boolean(pendingRun());
+}
+function reviewRequestView() {
+  return `<div class="agent-review"><div>${icon('sparkle')}<strong>与 ChatGPT 定向复核</strong></div><p>只审阅当前论断和你选择的证据。先明确关注点，再逐项处理发现。</p><form id="review-options" data-draft-key="review-options:${esc(selectedClaimId)}"><label for="review-mode">审查方式</label><select id="review-mode" name="mode"><option value="evidence">证据核对</option><option value="methods">研究设计与方法</option><option value="challenge">异议与替代解释</option></select><label for="review-focus">这次最想核对什么？（可选）</label><textarea id="review-focus" name="focus" rows="3" maxlength="2000" placeholder="例如：供体数是否支持结论？这项建议是否忽略了反证？"></textarea><p class="form-help">当前选择 ${checkedResources().size} 份证据；可在「证据文件」中调整。</p><button type="button" class="button" data-action="request-review" ${busy || bridge?.mode !== 'host' || !currentClaim() || state?.reviewStatus === 'paused' || pendingRun() ? 'disabled' : ''}>${pendingRun() ? '本次复核正在处理中' : '发起定向复核'} ${icon('arrow')}</button></form><div data-feedback-slot>${feedbackView()}</div></div>`;
+}
+function evidenceLabel(resource: Resource) { return resource.evidenceKind === 'computational_receipt' ? '计算回执 · 导入材料' : resource.evidenceKind === 'doi_verification' ? 'DOI 分层核验' : resource.sourceKind === 'synthetic_fixture' ? '合成示例' : resource.sourceKind === 'host_resource' ? '宿主资源' : '研究者上传'; }
 function resourceButton(resource: Resource, previewOnly = false) {
   return `<div class="resource-row ${selectedResourceId === resource.id ? 'is-previewed' : ''}">
     ${previewOnly ? '' : `<input class="resource-checkbox" type="checkbox" data-resource="${esc(resource.id)}" aria-label="将 ${esc(resource.name)} 纳入上下文" ${checkedResources().has(resource.id) ? 'checked' : ''} ${busy ? 'disabled' : ''}>`}
@@ -232,30 +384,31 @@ function claimList() {
     const match = !query || `${c.text} ${c.id} ${findings.map(f => f.title).join(' ')}`.toLowerCase().includes(query.toLowerCase());
     return match;
   });
-  return `<section class="sidebar-claims" aria-label="论断队列"><label class="search-field">${icon('search')}<input id="claim-search" type="search" placeholder="搜索论断…" value="${esc(query)}" aria-label="搜索论断"></label><div class="panel-title"><h2>${query ? '搜索结果' : '研究论断'} <span>${claims.length}</span></h2></div><div class="claim-list">${claims.map(c => `<button class="side-claim ${c.id === selectedClaimId ? 'selected' : ''}" data-action="claim" data-id="${esc(c.id)}" title="${esc(c.text)}" aria-current="${c.id === selectedClaimId ? 'true' : 'false'}"><span class="side-claim-dot" aria-hidden="true">${activeFindings(c.id).length ? '●' : '○'}</span><span>${esc(c.text)}</span><small>${activeFindings(c.id).length || ''}</small></button>`).join('') || '<div class="empty-state compact"><p>没有匹配的论断</p><button class="text-button" data-action="clear-search">清除搜索</button></div>'}</div></section>`;
+  return `<section class="sidebar-claims" aria-label="论断队列"><label class="search-field">${icon('search')}<input id="claim-search" type="search" placeholder="搜索论断…" value="${esc(query)}" aria-label="搜索论断"></label><div class="panel-title"><h2>${query ? '搜索结果' : '研究论断'} <span>${claims.length}</span></h2></div><div class="claim-list">${claims.map(c => `<button class="side-claim ${c.id === selectedClaimId ? 'selected' : ''}" data-action="claim" data-id="${esc(c.id)}" title="${esc(c.text)}" aria-current="${c.id === selectedClaimId ? 'true' : 'false'}"><span class="side-claim-dot" aria-hidden="true">${c.disposition === 'rejected' ? '×' : state?.reReview?.some(flag => flag.claimId === c.id && flag.status === 'pending') ? '!' : activeFindings(c.id).length ? '●' : '○'}</span><span>${esc(c.text)}${c.disposition === 'rejected' ? '<em class="claim-status-label">已驳回</em>' : state?.reReview?.some(flag => flag.claimId === c.id && flag.status === 'pending') ? '<em class="claim-status-label">需要重审</em>' : ''}</span><small>${activeFindings(c.id).length || ''}</small></button>`).join('') || '<div class="empty-state compact"><p>没有匹配的论断</p><button class="text-button" data-action="clear-search">清除搜索</button></div>'}</div></section>`;
 }
 function findingsView(claim: Claim) {
   const active = activeFindings(claim.id);
   const historical = claimFindings(claim.id).filter(f => f.status === 'stale');
-  const cards = (findings: Finding[]) => findings.map(f => `<button class="finding-card ${f.id === selectedFindingId ? 'selected' : ''} ${f.status === 'stale' ? 'stale' : ''}" data-action="finding" data-id="${esc(f.id)}" aria-pressed="${f.id === selectedFindingId}"><div class="finding-top"><span class="severity ${f.severity}">${severityLabel(f.severity)}</span><span class="finding-category">${esc(categoryNames[f.category] ?? f.category)}${f.status === 'stale' ? ' · 已过期' : ''}</span></div><h4>${esc(f.title)}</h4><p>${esc(f.rationale)}</p><div class="finding-source"><span>${f.source === 'deterministic_check' ? '规则检查' : 'Agent 建议'}</span><span>${f.id === selectedFindingId ? '正在审阅' : '审阅此项'} ${icon('arrow')}</span></div></button>`).join('');
-  return `<section class="detail-section findings-section"><div class="section-title"><h3>当前发现 <span class="count">${active.length}</span></h3><span class="small-label">选择一项，在右侧回应</span></div>${active.length ? `<div class="findings-list">${cards(active)}</div>` : '<div class="empty-state compact"><strong>暂无当前发现</strong><p>运行检查以核对元数据；无发现不代表结论成立。</p></div>'}${historical.length ? `<details class="historical-findings" data-details-key="history:${esc(claim.id)}"><summary>历史发现 · ${historical.length} 项已过期</summary><div class="findings-list">${cards(historical)}</div></details>` : ''}</section>`;
+  const cards = (findings: Finding[]) => findings.map(f => `<button class="finding-card ${f.id === selectedFindingId ? 'selected' : ''} ${f.status === 'stale' ? 'stale' : ''}" data-action="finding" data-id="${esc(f.id)}" aria-pressed="${f.id === selectedFindingId}"><div class="finding-top"><span class="severity ${f.severity}">${severityLabel(f.severity)}</span><span class="finding-category">${esc(categoryNames[f.category] ?? f.category)}${f.status === 'stale' ? ' · 已过期' : ''}</span></div><h4>${esc(f.title)}</h4><p>${esc(f.rationale)}</p><div class="finding-source"><span>${f.source === 'deterministic_check' ? '规则检查' : f.revisionProposal ? 'Agent 建议 · 含修订提案' : 'Agent 建议'}</span><span>${f.id === selectedFindingId ? '正在审阅' : '审阅此项'} ${icon('arrow')}</span></div></button>`).join('');
+  return `<section class="detail-section findings-section"><div class="section-title"><h3>当前发现 <span class="count">${active.length}</span></h3><span class="small-label">选择一项，在右侧回应</span></div>${active.length ? `<div class="findings-list">${cards(active)}</div>` : '<div class="empty-state compact"><strong>暂无当前发现</strong><p>请查看上方规则报告与待补充项；无发现不代表结论成立。</p></div>'}${historical.length ? `<details class="historical-findings" data-details-key="history:${esc(claim.id)}"><summary>历史发现 · ${historical.length} 项已过期</summary><div class="findings-list">${cards(historical)}</div></details>` : ''}</section>`;
 }
 function claimDetail() {
   const claim = currentClaim(); if (!claim || !state) return `<article class="claim-detail"><div class="empty-state"><h1>${esc(state?.title ?? '新的研究会话')}</h1><p>先添加一个需要审查的论断，再为它关联证据文件。</p><button class="button button-primary" data-action="create-claim">${icon('plus')}添加第一个论断</button></div></article>`;
   const resources = state.resources.filter(r => claim.resourceIds.includes(r.id));
-  return `<article class="claim-detail"><div class="detail-heading"><span class="overline">当前论断</span><span class="neutral-badge">${esc(scopeNames[claim.scope] ?? claim.scope)}</span></div><h1 class="claim-statement">${esc(claim.text)}</h1><div class="evidence-ceiling">${icon('shield')}<span>证据尚未评估 · 科学结论待独立验证</span></div>
+  return `<article class="claim-detail"><div class="detail-heading"><span class="overline">当前论断</span><span class="neutral-badge">${esc(scopeNames[claim.scope] ?? claim.scope)}</span></div><h1 class="claim-statement">${esc(claim.text)}</h1><div class="evidence-ceiling">${icon('shield')}<span>NOT_ASSESSED · 证据尚未评估 · 科学结论待独立验证</span></div>${localReviewView(claim)}
   <div class="review-body-tabbar" role="tablist" aria-label="论断内容"><button role="tab" id="review-tab" tabindex="${reviewTab === 'review' ? 0 : -1}" aria-selected="${reviewTab === 'review'}" aria-controls="claim-tabpanel" data-action="review-tab" data-id="review">${icon('grid')}当前审查 <span>${activeFindings(claim.id).length}</span></button><button role="tab" id="evidence-tab" tabindex="${reviewTab === 'evidence' ? 0 : -1}" aria-selected="${reviewTab === 'evidence'}" aria-controls="claim-tabpanel" data-action="review-tab" data-id="evidence">${icon('file')}证据文件 <span>${resources.length}</span></button></div><div id="claim-tabpanel" role="tabpanel" aria-labelledby="${reviewTab}-tab">
-  ${reviewTab === 'review' ? `<details class="revise-box" data-details-key="revise:${esc(claim.id)}"><summary>${icon('file')}修订论断<span>措辞与适用范围</span>${icon('plus')}</summary><form id="revise-form" data-draft-key="revise:${esc(claim.id)}"><input type="hidden" name="baselineText" value="${esc(claim.text)}"><input type="hidden" name="baselineScope" value="${esc(claim.scope)}"><label>论断内容<textarea name="text" rows="4" required maxlength="10000">${esc(claim.text)}</textarea></label><label>适用范围<select name="scope">${Object.entries(scopeNames).map(([value, name]) => `<option value="${value}" ${claim.scope === value ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>修订理由<textarea name="rationale" rows="2" required maxlength="5000" placeholder="说明修改依据…"></textarea></label><p class="form-help">保存后旧发现将过期，需要重新检查。</p><button class="button button-primary" type="submit" ${busy ? 'disabled' : ''}>保存修订</button></form></details>${findingsView(claim)}<button class="button evidence-shortcut" data-action="review-tab" data-id="evidence">${icon('file')}查看 ${resources.length} 份关联证据 ${icon('arrow')}</button>` : `<section class="detail-section"><div class="section-title"><h3>关联证据 <span class="count">${resources.length}</span></h3><button class="text-button" data-action="attach" ${busy ? 'disabled' : ''}>${icon('plus')}添加文件</button></div><p class="section-description">勾选要提供给 Agent 的资源，再同步到对话。</p><div class="resource-list">${resources.length ? resources.map(r => resourceButton(r)).join('') : '<div class="muted-box">尚无关联证据。可通过顶部「添加文件」导入。</div>'}</div><div class="context-actions"><span><strong id="selected-resource-count">${checkedResources().size}</strong> 个资源已选择</span><button class="button button-small" data-action="sync" ${busy ? 'disabled' : ''}>${icon('link')}同步上下文</button></div>${filePreview()}</section>`}</div>
+  ${reviewTab === 'review' ? `<details class="revise-box" data-details-key="revise:${esc(claim.id)}"><summary>${icon('file')}修订论断<span>措辞、范围与审查信息</span>${icon('plus')}</summary><form id="revise-form" data-draft-key="revise:${esc(claim.id)}"><input type="hidden" name="baselineText" value="${esc(claim.text)}"><input type="hidden" name="baselineScope" value="${esc(claim.scope)}"><input type="hidden" name="baselineMetadata" value="${esc(metadataSignature(claim.metadata))}"><label>论断内容<textarea name="text" rows="4" required maxlength="10000">${esc(claim.text)}</textarea></label><label>适用范围<select name="scope">${Object.entries(scopeNames).map(([value, name]) => `<option value="${value}" ${claim.scope === value ? 'selected' : ''}>${name}</option>`).join('')}</select></label>${metadataFields(claim.metadata, 'revise-meta')}<label>修订理由<textarea name="rationale" rows="2" required maxlength="5000" placeholder="说明修改依据…"></textarea></label><p class="form-help">修改会使本论断及受影响的依赖下游意见过期；其他论断保留已有审查。</p><button class="button button-primary" type="submit" ${busy ? 'disabled' : ''}>保存修订</button></form></details>${evidenceIntakeSummary(resources)}${claimGraphView(claim)}${evidencePlanView(claim)}${designCardView(claim)}${metadataReviewView(claim)}${findingsView(claim)}<button class="button evidence-shortcut" data-action="review-tab" data-id="evidence">${icon('file')}查看 ${resources.length} 份关联证据 ${icon('arrow')}</button>` : `<section class="detail-section"><div class="section-title"><h3>关联证据 <span class="count">${resources.length}</span></h3><button class="text-button" data-action="attach" ${busy ? 'disabled' : ''}>${icon('plus')}添加文件</button></div><p class="section-description">勾选要提供给 Agent 的资源，再同步到对话。</p><div class="resource-list">${resources.length ? resources.map(r => resourceButton(r)).join('') : '<div class="muted-box">尚无关联证据。可通过顶部「添加文件」导入。</div>'}</div><div class="context-actions"><span><strong id="selected-resource-count">${checkedResources().size}</strong> 个资源已选择</span><button class="button button-small" data-action="sync" ${busy ? 'disabled' : ''}>${icon('link')}同步上下文</button></div>${resources.filter(resource => resource.evidenceKind).map(evidenceRecordView).join('')}${filePreview()}${evidenceIntakeForms(claim.id,busy)}</section>`}</div>
   <div class="detail-footer"><span>快照 <code>${esc(state.snapshotHash.slice(0, 12))}…</code></span><button class="text-button" data-action="refresh" ${busy ? 'disabled' : ''}>${icon('refresh')}刷新</button></div></article>`;
 }
 function decisionPanel() {
   const finding = currentFinding();
   const relatedDecisions = state?.decisions.filter(d => (d as unknown as Record<string, unknown>).findingId === selectedFindingId) ?? [];
-  return `<aside class="decision-panel" aria-label="研究者决策"><div class="decision-title"><span class="decision-icon">${icon('sparkle')}</span><div><h2>研究者判断</h2></div></div>${finding ? `<div class="decision-target"><span class="small-label">正在回应的发现</span><strong>${esc(finding.title)}</strong><code>${esc(finding.id)}</code></div>${finding.status === 'stale' ? '<div class="inline-warning">这项发现基于旧快照。重新运行检查后，再提交决定。</div>' : ''}<form id="decision-form" data-draft-key="decision:${esc(finding.id)}"><fieldset ${busy || finding.status === 'stale' ? 'disabled' : ''}><legend>选择你的处理方式</legend>${[['challenge', '质疑建议', '提出反证、替代解释或方法异议'], ['dismiss', '驳回建议', '说明为什么该建议不适用'], ['defer', '暂缓决定', '保留问题，等待更多证据'], ['accept_with_limits', '附条件采纳', '明确适用边界与后续条件']].map(([value, title, subtitle], index) => `<label class="decision-option"><input type="radio" name="decision" value="${value}" ${index === 0 ? 'checked' : ''}><span><strong>${title}</strong><small>${subtitle}</small></span></label>`).join('')}<label class="rationale-label" for="decision-rationale">判断依据 <span>必填</span></label><textarea id="decision-rationale" name="rationale" rows="4" maxlength="5000" required placeholder="写下你的理由、相关证据或需要进一步核实的内容…"></textarea><div id="conditions-field" hidden><label class="rationale-label" for="decision-conditions">采纳条件 <span>必填，每行一项</span></label><textarea id="decision-conditions" name="conditions" rows="3" maxlength="5000" placeholder="例如：仅限本样本，不作人群外推"></textarea></div><button class="button button-primary decision-submit" type="submit">${icon('check')}提交研究者决定</button></fieldset></form><p class="decision-footnote">记录为界面中的研究者操作，不等同于身份认证、伦理批准或科学签署。</p>${relatedDecisions.length ? `<div class="recent-decision"><span class="small-label">本项介入记录</span>${relatedDecisions.slice(-2).map(d => { const x = d as unknown as Record<string, unknown>; return `<div><strong>${esc(decisionNames[String(x.decision)] ?? '已记录决定')}</strong><p>${esc(x.rationale)}</p></div>`; }).join('')}</div>` : ''}` : `<div class="empty-state compact">${icon('grid')}<strong>选择一项检查发现</strong><p>你可以质疑、驳回、暂缓，或限定采纳范围。</p></div>`}<div class="agent-review"><div>${icon('sparkle')}<strong>需要更深入的复核？</strong></div><p>针对当前论断和所选证据，请求 Agent 补充审查。</p><button class="button" data-action="request-review" ${busy || !currentClaim() || state?.reviewStatus === 'paused' ? 'disabled' : ''}>发起定向复核 ${icon('arrow')}</button></div></aside>`;
+  return `<aside class="decision-panel" aria-label="研究者决策"><div class="decision-title"><span class="decision-icon">${icon('sparkle')}</span><div><h2>研究者判断</h2></div></div>${finding ? `<div class="decision-target"><span class="small-label">正在回应的发现</span><strong>${esc(finding.title)}</strong><code>${esc(finding.id)}</code></div>${finding.status === 'stale' ? '<div class="inline-warning">原发现已过期，不能再提交处理决定。若下方修订提案仍有可采纳部分，可继续逐项确认。</div>' : ''}<form id="decision-form" data-draft-key="decision:${esc(finding.id)}"><fieldset ${busy || finding.status === 'stale' ? 'disabled' : ''}><legend>选择你的处理方式</legend>${[['challenge', '质疑建议', '提出反证、替代解释或方法异议'], ['dismiss', '驳回建议', '说明为什么该建议不适用'], ['defer', '暂缓决定', '保留问题，等待更多证据'], ['accept_with_limits', '附条件采纳', '明确适用边界与后续条件']].map(([value, title, subtitle], index) => `<label class="decision-option"><input type="radio" name="decision" value="${value}" ${index === 0 ? 'checked' : ''}><span><strong>${title}</strong><small>${subtitle}</small></span></label>`).join('')}<label class="rationale-label" for="decision-rationale">判断依据 <span>必填</span></label><textarea id="decision-rationale" name="rationale" rows="4" maxlength="5000" required placeholder="写下你的理由、相关证据或需要进一步核实的内容…"></textarea><div id="conditions-field" hidden><label class="rationale-label" for="decision-conditions">采纳条件 <span>必填，每行一项</span></label><textarea id="decision-conditions" name="conditions" rows="3" maxlength="5000" placeholder="例如：仅限本样本，不作人群外推"></textarea></div><button class="button button-primary decision-submit" type="submit">${icon('check')}提交研究者决定</button></fieldset></form><p class="decision-footnote">记录为界面中的研究者操作，不等同于身份认证、伦理批准或科学签署。</p>${revisionProposalView(finding)}${relatedDecisions.length ? `<div class="recent-decision"><span class="small-label">本项介入记录</span>${relatedDecisions.slice(-2).map(d => { const x = d as unknown as Record<string, unknown>; return `<div><strong>${esc(decisionNames[String(x.decision)] ?? '已记录决定')}</strong><p>${esc(x.rationale)}</p></div>`; }).join('')}</div>` : ''}` : `<div class="empty-state compact">${icon('grid')}<strong>选择一项检查发现</strong><p>你可以质疑、驳回、暂缓，或限定采纳范围。</p></div>`}${reviewRequestView()}</aside>`;
 }
 function filePreview() {
   const resource = state?.resources.find(r => r.id === selectedResourceId);
   if (!resource) return '';
+  if (resource.evidenceKind) return `<section class="file-preview" aria-label="原始证据记录"><div><strong>${esc(resource.name)}</strong><button class="icon-button" data-action="close-preview" aria-label="关闭预览">${icon('close')}</button></div>${section === 'resources' ? evidenceRecordView(resource) : ''}<details><summary>查看原始记录 JSON（纯文本）</summary><pre tabindex="0">${esc(resource.content.slice(0,14000))}${resource.content.length > 14000 ? '\n…（预览截取前 14,000 个字符；完整内容保留在快照）' : ''}</pre></details><span class="hash-label">记录 SHA-256 <code>${esc(resource.sha256)}</code></span></section>`;
   const canEdit = bridge?.mode === 'host' && resource.sourceKind === 'host_resource' && !!resource.sourceUri;
   const editing = canEdit && editingResourceId === resource.id;
   return `<section class="file-preview" aria-label="文件预览"><div><strong>${esc(resource.name)}</strong><button class="icon-button" data-action="close-preview" aria-label="关闭预览">${icon('close')}</button></div><p>纯文本预览 · ${esc(evidenceLabel(resource))} · 内容不会作为操作指令执行</p>${editing ? `<form id="resource-edit-form" class="resource-editor" data-draft-key="resource:${esc(resource.id)}"><label for="resource-edit-content">编辑宿主文件内容</label><textarea id="resource-edit-content" name="content" rows="10" maxlength="1000000">${esc(resource.content)}</textarea><p>此操作写回当前宿主文件。必须与打开的文件 URI 相同，且宿主提供可写权限和版本标识；保存后请重新导入证据。</p><button class="button button-primary" type="submit" ${busy ? 'disabled' : ''}>保存到该宿主文件</button><button class="text-button" type="button" data-action="cancel-edit">取消编辑</button></form>` : `<pre tabindex="0">${esc(resource.content.slice(0, 14000))}${resource.content.length > 14000 ? '\n…（预览截取前 14,000 个字符）' : ''}</pre>${canEdit ? `<button class="button preview-edit-button" data-action="edit-resource">${icon('file')}编辑宿主文件</button>` : ''}`}<span class="hash-label">SHA-256 <code>${esc(resource.sha256)}</code></span>${resource.sourceUri ? `<span class="source-uri">来源：${esc(resource.sourceUri)}</span>` : ''}</section>`;
@@ -265,7 +418,7 @@ function resourcesView() {
   return `<section class="full-panel"><div class="full-panel-heading"><div><span class="overline">EVIDENCE LIBRARY</span><h2>证据资源库</h2><p>每份资源保留来源与内容摘要。选择论断后可在共审台绑定新增文件。</p></div><button class="button" data-action="attach" ${busy || !currentClaim() ? 'disabled' : ''}>${icon('plus')}添加到当前论断</button></div><div class="library-layout"><div class="resource-list">${state.resources.map(r => resourceButton(r, true)).join('') || '<div class="empty-state">尚无资源。</div>'}</div><div class="library-preview">${filePreview() || `<div class="empty-state">${icon('file')}<strong>查看证据，而不离开工作区</strong><p>选择资源，预览内容、来源与校验值。</p></div>`}</div></div></section>`;
 }
 function newClaimForm() {
-  return `<section class="full-panel create-claim-panel"><div class="section-title"><h3>添加你要审查的论断</h3><button class="icon-button" data-action="cancel-create" aria-label="关闭新建论断">${icon('close')}</button></div><form id="new-claim-form" data-draft-key="new-claim"><label for="new-claim-text">论断内容</label><textarea id="new-claim-text" name="text" rows="3" required maxlength="8000" placeholder="准确描述需要共同审查的研究论断…"></textarea><div class="new-claim-fields"><label>外推范围<select name="scope">${Object.entries(scopeNames).map(([value, name]) => `<option value="${value}">${name}</option>`).join('')}</select></label><label>纳入理由<input type="text" name="rationale" required maxlength="5000" placeholder="为什么需要审查这项论断？"></label></div><div class="create-claim-actions"><p>新论断初始证据上限为「尚未评估」。</p><button class="button button-primary" type="submit" ${busy ? 'disabled' : ''}>${icon('plus')}加入共审队列</button></div></form></section>`;
+  return `<section class="full-panel create-claim-panel"><div class="section-title"><h3>添加你要审查的论断</h3><button class="icon-button" data-action="cancel-create" aria-label="关闭新建论断">${icon('close')}</button></div><form id="new-claim-form" data-draft-key="new-claim"><label for="new-claim-text">论断内容</label><textarea id="new-claim-text" name="text" rows="3" required maxlength="8000" placeholder="准确描述需要共同审查的研究论断…"></textarea><div class="new-claim-fields"><label>外推范围<select name="scope">${Object.entries(scopeNames).map(([value, name]) => `<option value="${value}">${name}</option>`).join('')}</select></label><label>纳入理由<input type="text" name="rationale" required maxlength="5000" placeholder="为什么需要审查这项论断？"></label></div>${metadataFields({}, 'new-meta')}<div class="create-claim-actions"><p>新论断初始证据上限为「尚未评估」。</p><button class="button button-primary" type="submit" ${busy ? 'disabled' : ''}>${icon('plus')}加入共审队列</button></div></form></section>`;
 }
 function stagedFilePanel() {
   if (!stagedFile) return '';
@@ -338,7 +491,7 @@ function replayView() {
 }
 function projectView() {
   if (!state) return '';
-  return `<section class="full-panel"><div class="full-panel-heading"><div><span class="overline">PROJECT & EVIDENCE BOUNDARIES</span><h2>${esc(state.title)}</h2><p>把可运行的交互、宿主能力与科学证据分别说明。</p></div><span class="neutral-badge">${esc(state.projectId)}</span></div><div class="project-grid"><div class="project-card"><span class="project-number">01</span><h3>研究者保持决策权</h3><p>规则与 Agent 只能提出建议。研究者可修订论断、选择资源、质疑、驳回或暂缓建议，也可以暂停共审。</p><button class="button" data-action="toggle-pause" ${busy ? 'disabled' : ''}>${icon(state.reviewStatus === 'paused' ? 'play' : 'pause')}${state.reviewStatus === 'paused' ? '恢复共审' : '暂停共审'}</button></div><div class="project-card"><span class="project-number">02</span><h3>当前证据边界</h3><p>${state.fixture ? '本会话包含明确标记的合成演示材料。' : '本会话的材料与结论尚待独立核验。'}规则检查只识别结构性风险，不验证生物学机制或统计真实性。</p><span class="boundary-tag">科学执行授权：${esc(state.scientificAuthorization)}</span></div><div class="project-card"><span class="project-number">03</span><h3>宿主与上下文</h3><p>当前运行于<strong>${bridge?.mode === 'host' ? ' MCP 宿主' : '本地预览'}</strong>。文件选择、上下文同步、定向复核与导出均由显式操作触发；实际能力取决于宿主支持。</p><div class="capability-list">${(bridge?.capabilities() ?? []).map(c => `<code>${esc(c)}</code>`).join('') || '<span class="small-label">宿主尚未报告额外能力</span>'}</div></div><div class="project-card"><span class="project-number">04</span><h3>快照与来源</h3><p>修改会推进版本并使旧发现过期。导出保留论断、资源、发现、决定和事件；摘要用于核对内容，不能证明科学有效性。</p><button class="button" data-action="export" ${busy ? 'disabled' : ''}>${icon('download')}导出当前 JSON 快照</button></div></div><div class="project-hash"><span>完整快照摘要</span><code>${esc(state.snapshotHash)}</code></div></section>`;
+  return `<section class="full-panel"><div class="full-panel-heading"><div><span class="overline">PROJECT & EVIDENCE BOUNDARIES</span><h2>${esc(state.title)}</h2><p>把可运行的交互、宿主能力与科学证据分别说明。</p></div><span class="neutral-badge">${esc(state.projectId)}</span></div><div class="project-grid"><div class="project-card"><span class="project-number">01</span><h3>研究者保持决策权</h3><p>规则与 Agent 只能提出建议。研究者可修订论断、选择资源、质疑、驳回或暂缓建议，也可以暂停共审。</p><button class="button" data-action="toggle-pause" ${busy ? 'disabled' : ''}>${icon(state.reviewStatus === 'paused' ? 'play' : 'pause')}${state.reviewStatus === 'paused' ? '恢复共审' : '暂停共审'}</button></div><div class="project-card"><span class="project-number">02</span><h3>当前证据边界</h3><p>${state.fixture ? '本会话包含明确标记的合成演示材料。' : '本会话的材料与结论尚待独立核验。'}规则检查只识别结构性风险，不验证生物学机制或统计真实性。</p><span class="boundary-tag">科学执行授权：${esc(state.scientificAuthorization)}</span></div><div class="project-card"><span class="project-number">03</span><h3>宿主与上下文</h3><p>当前运行于<strong>${bridge?.mode === 'host' ? ' MCP 宿主' : '本地预览'}</strong>。文件选择、上下文同步、定向复核与导出均由显式操作触发；实际能力取决于宿主支持。</p><div class="capability-list">${(bridge?.capabilities() ?? []).map(c => `<code>${esc(c)}</code>`).join('') || '<span class="small-label">宿主尚未报告额外能力</span>'}</div></div><div class="project-card"><span class="project-number">04</span><h3>快照与来源</h3><p>修改会推进版本，并按受影响的论断及依赖关系安排局部重审。导出保留论断关系、提案、补证计划与事件；摘要用于核对内容，不能证明科学有效性。</p><button class="button" data-action="export" ${busy ? 'disabled' : ''}>${icon('download')}导出当前 JSON 快照</button></div></div><div class="project-hash"><span>完整快照摘要</span><code>${esc(state.snapshotHash)}</code></div></section>`;
 }
 function render() {
   if (page !== 'workbench' || section !== 'replay' || busy) stopReplay();
@@ -365,9 +518,9 @@ function render() {
     return;
   }
   document.title = `Research Locus · ${section === 'replay' ? '回放剧场' : '科研共审台'}`;
-  root.innerHTML = `<div class="app-shell">${sidebar()}${mobileNavOpen ? '<button class="nav-backdrop" data-action="menu" aria-label="收起导航"></button>' : ''}<div class="main-shell">${header()}<main class="main-content">${topContent()}${notice ? `<div class="notice ${notice.kind}" role="${notice.kind === 'error' ? 'alert' : 'status'}">${icon(notice.kind === 'success' ? 'check' : 'shield')}<span>${esc(notice.text)}</span><button class="icon-button" data-action="dismiss-notice" aria-label="关闭消息">${icon('close')}</button></div>` : ''}${busy ? `<div class="busy-message" role="status"><span class="spinner"></span>${esc(busyLabel)}</div>` : ''}${section !== 'replay' && state.reviewStatus === 'paused' ? '<div class="paused-banner">已暂停检查和接收新意见；已发出的远端任务不会自动取消。<button data-action="toggle-pause">恢复共审 →</button></div>' : ''}${section !== 'replay' ? stagedFilePanel() : ''}${section !== 'replay' && creatingClaim ? newClaimForm() : ''}${section === 'replay' ? replayView() : section === 'review' ? `<div class="review-workspace">${claimDetail()}${decisionPanel()}</div>` : section === 'resources' ? resourcesView() : section === 'history' ? historyView() : projectView()}<footer class="page-footer"><span>${state.fixture ? '合成材料用于流程演示。' : ''}规则检查不构成科学确认。</span><span>研究者身份未认证</span></footer></main></div></div>`;
+  root.innerHTML = `<div class="app-shell">${sidebar()}${mobileNavOpen ? '<button class="nav-backdrop" data-action="menu" aria-label="收起导航"></button>' : ''}<div class="main-shell">${header()}<div data-feedback-summary>${feedbackSummaryView()}</div><main class="main-content">${topContent()}${notice ? `<div class="notice ${notice.kind}" role="${notice.kind === 'error' ? 'alert' : 'status'}">${icon(notice.kind === 'success' ? 'check' : 'shield')}<span>${esc(notice.text)}</span><button class="icon-button" data-action="dismiss-notice" aria-label="关闭消息">${icon('close')}</button></div>` : ''}${busy ? `<div class="busy-message" role="status"><span class="spinner"></span>${esc(busyLabel)}</div>` : ''}${section !== 'replay' && state.reviewStatus === 'paused' ? '<div class="paused-banner">已暂停检查和接收新意见；已发出的远端任务不会自动取消。<button data-action="toggle-pause">恢复共审 →</button></div>' : ''}${section !== 'replay' ? stagedFilePanel() : ''}${section !== 'replay' && creatingClaim ? newClaimForm() : ''}${section === 'replay' ? replayView() : section === 'review' ? `<div class="review-workspace">${claimDetail()}${decisionPanel()}</div>` : section === 'resources' ? resourcesView() : section === 'history' ? historyView() : projectView()}<footer class="page-footer"><span>${state.fixture ? '合成材料用于流程演示。' : ''}规则检查不构成科学确认。</span><span>研究者身份未认证</span></footer></main></div></div>`;
   restoreDrafts();
-  for (const detail of root.querySelectorAll<HTMLDetailsElement>('details[data-details-key]')) detail.open = expandedDetails.get(detail.dataset.detailsKey!) ?? false;
+  for (const detail of root.querySelectorAll<HTMLDetailsElement>('details[data-details-key]')) detail.open = expandedDetails.get(detail.dataset.detailsKey!) ?? detail.open;
   const nextFocus = focusSelector ? root.querySelector<HTMLElement>(focusSelector) : null;
   if (nextFocus && !nextFocus.matches(':disabled')) {
     nextFocus.focus({preventScroll:true});
@@ -395,6 +548,7 @@ root.addEventListener('click', async event => {
   if (menu) { menu.open = false; expandedDetails.set('toolbar-more',false); }
   if (action === 'menu') { mobileNavOpen = !mobileNavOpen; render(); return; }
   if (action === 'dismiss-notice') { notice = null; render(); return; }
+  if (action === 'show-feedback') { section = 'review'; render(); root.querySelector<HTMLElement>('.review-feedback')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
   if (action === 'reconnect') { await connect(); return; }
   if (busy) return;
   if (action?.startsWith('replay-')) {
@@ -415,6 +569,7 @@ root.addEventListener('click', async event => {
   if (action === 'open-session') { await openSavedSession(id); return; }
   if (action === 'section') { section = id as Section; mobileNavOpen = false; render(); }
   if (action === 'focus-search') { mobileNavOpen = true; render(); document.querySelector<HTMLInputElement>('#claim-search')?.focus(); return; }
+  if (action === 'open-evidence-intake') { reviewTab = 'evidence'; render(); root.querySelector<HTMLElement>('.evidence-intake')?.scrollIntoView({ block:'start', behavior:'smooth' }); return; }
   if (action === 'review-tab') { reviewTab = id === 'evidence' ? 'evidence' : 'review'; render(); return; }
   if (action === 'claim') { selectedClaimId = id; selectedFindingId = ''; selectedResourceId = ''; section = 'review'; reviewTab = 'review'; mobileNavOpen = false; reconcileSelection(); render(); }
   if (action === 'finding') { selectedFindingId = id; render(); }
@@ -441,11 +596,41 @@ root.addEventListener('click', async event => {
   if (action === 'create-claim') { creatingClaim = true; section = 'review'; mobileNavOpen = false; render(); document.querySelector<HTMLTextAreaElement>('#new-claim-text')?.focus(); }
   if (action === 'cancel-create') { creatingClaim = false; render(); }
   if (action === 'clear-search') { query = ''; render(); }
-  if (action === 'run') await act({ type: 'run_review' }, '规则检查已完成。请逐项核对发现与证据边界。');
+  if (action === 'run') {
+    const saved = await act({ type: 'run_review' }, '规则检查已完成。');
+    if (saved && state) {
+      const report = currentMetadataReview(state);
+      if (report) {
+        const counts = summarizeChecks(report.checks);
+        setNotice('success', counts.claims ? `已检查 ${counts.claims} 个论断：${counts.flagged} 项风险，${counts.needsInput} 项信息不足，${counts.noSignal} 项未触发，${counts.notApplicable} 项不适用。结果仅基于声明；不等于科学通过。` : '当前没有论断可检查。请先添加论断及已知审查信息。');
+        render();
+      }
+    }
+  }
+  if (action === 'edit-metadata') {
+    reviewTab = 'review'; render();
+    const details = root.querySelector<HTMLDetailsElement>('.revise-box');
+    if (details) { details.open = true; expandedDetails.set(`revise:${selectedClaimId}`, true); }
+    root.querySelector<HTMLElement>('#revise-meta-analysisUnit')?.focus();
+  }
+  if (action === 'extract-design' && state) {
+    if (!checkedResources().size) { setNotice('error','请先在「证据文件」中勾选用于提取设计的材料。'); render(); return; }
+    await perform('正在登记设计提取并发送到 ChatGPT…',async () => { setNotice('success',await bridge.requestReview(state!,selectedClaimId,[...checkedResources()],'design','从选定证据提取研究设计候选，待研究者确认。')); });
+  }
   if (action === 'toggle-pause') await act({ type: state?.reviewStatus === 'paused' ? 'resume' : 'pause' }, state?.reviewStatus === 'paused' ? '已恢复共审。' : '已暂停共审。');
   if (action === 'refresh') await perform('正在刷新…', async () => { receiveState(await bridge.getState()); setNotice('success', '已载入最新工作区快照。'); });
   if (action === 'sync' && state) await perform('正在同步所选上下文…', async () => { setNotice('success', await bridge.syncContext(state!, selectedClaimId, [...checkedResources()])); });
-  if (action === 'request-review' && state) await perform('正在请求定向复核…', async () => { setNotice('success', await bridge.requestReview(state!, selectedClaimId, [...checkedResources()])); });
+  if (action === 'request-review' && state) {
+    const options = new FormData(root.querySelector<HTMLFormElement>('#review-options')!);
+    const mode = String(options.get('mode') ?? 'evidence') as ReviewMode;
+    const focus = String(options.get('focus') ?? '').trim();
+    await perform('正在登记请求并发送到 ChatGPT…', async () => { setNotice('success', await bridge.requestReview(state!, selectedClaimId, [...checkedResources()], mode, focus)); });
+  }
+  if (action === 'refresh-feedback') await perform('正在刷新进展…', async () => { await bridge.refresh(); });
+  if (action === 'cancel-review') {
+    const run = selectedRun();
+    if (run) await perform('正在结束等待…', async () => { await bridge.cancelReview(run.id); setNotice('success', '已结束本次等待。这不会取消 ChatGPT 中已发送的消息。'); });
+  }
   if (action === 'attach' && state) {
     const claimId = selectedClaimId;
     await perform('正在选择并读取文件…', async () => {
@@ -484,6 +669,10 @@ root.addEventListener('compositionstart', () => { composing = true; });
 root.addEventListener('compositionend', event => { composing = false; if ((event.target as HTMLInputElement).id === 'claim-search') query = (event.target as HTMLInputElement).value; if ((event.target as HTMLInputElement).id === 'home-search') homeQuery = (event.target as HTMLInputElement).value; render(); });
 window.addEventListener('keydown', event => {
   const keyTarget = event.target as HTMLElement | null;
+  const graphNode = keyTarget?.closest<SVGElement>('.graph-node[data-action="claim"]');
+  if (graphNode && (event.key === 'Enter' || event.key === ' ')) {
+    event.preventDefault(); graphNode.dispatchEvent(new MouseEvent('click',{ bubbles:true })); return;
+  }
   if (page === 'workbench' && section === 'replay' && !busy && !event.isComposing && !composing && !event.ctrlKey && !event.metaKey && !event.altKey && !keyTarget?.closest('input,textarea,select,[contenteditable="true"],summary')) {
     const { steps, index } = currentReplay();
     if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) {
@@ -499,6 +688,19 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && rep
 window.addEventListener('pagehide', stopReplay);
 root.addEventListener('change', event => {
   const target = event.target as HTMLInputElement;
+  if (target.type === 'file') {
+    const label = target.closest('form')?.querySelector<HTMLElement>(`[data-files-label="${CSS.escape(target.name)}"]`);
+    const files = [...(target.files ?? [])];
+    if (label) label.textContent = files.length ? `${files.length} 个文件 · ${files.map(file => file.name).join('、')}` : '尚未选择';
+  }
+  if (target.name === 'meta_biologicalReplicates_status') {
+    const numberInput = target.closest('form')?.querySelector<HTMLInputElement>('[name="meta_biologicalReplicates"]');
+    if (numberInput) { numberInput.disabled = target.value !== 'known'; numberInput.required = !numberInput.disabled; if (numberInput.disabled) numberInput.value = ''; }
+  }
+  if (target.name === 'meta_figureApplicable') {
+    const matched = target.closest('form')?.querySelector<HTMLSelectElement>('[name="meta_figureSourceMatched"]');
+    if (matched) { matched.disabled = target.value === 'false'; if (matched.disabled) matched.value = NOT_DECLARED; }
+  }
   if (target.id === 'replay-progress') { seekReplay(Number(target.value)); return; }
   if (target.dataset.resource) {
     if (target.checked) checkedResources().add(target.dataset.resource); else checkedResources().delete(target.dataset.resource);
@@ -517,6 +719,13 @@ root.addEventListener('submit', async event => {
   const form = event.target as HTMLFormElement;
   if (!form.reportValidity()) return;
   const data = new FormData(form);
+  if (form.classList.contains('design-proposal') && state) {
+    const selectedFields = designKeys.filter(key => data.has(`select_${key}`));
+    const saved = await act({ type:'confirm_design',proposalId:form.dataset.proposalId,selectedFields,rationale:String(data.get('rationale')) },selectedFields.length ? '选中候选已写入研究设计卡。请重新运行检查；旧意见与其他候选可能已过期。' : '已驳回本组候选；研究设计卡保持原值。');
+    if (saved) { formDrafts.delete(formDraftKey(form)); render(); }
+    return;
+  }
+  if (form.id === 'review-options') return;
   if (form.id === 'new-project-form') {
     const title = String(data.get('title') ?? '').trim();
     if (!title) { setNotice('error','请填写项目名称。'); render(); return; }
@@ -544,6 +753,37 @@ root.addEventListener('submit', async event => {
     return;
   }
   if (!state) return;
+  if (form.id === 'receipt-generic-form' || form.id === 'receipt-bionexus-form') {
+    const rationale = String(data.get('rationale') ?? '').trim();
+    if (!rationale) { setNotice('error','请填写这份计算回执的纳入理由。'); render(); return; }
+    const claimId = selectedClaimId, revision = state.revision, draftKey = formDraftKey(form);
+    const groups: IntakeFileGroups = Object.fromEntries([...form.querySelectorAll<HTMLInputElement>('input[type="file"][name]')].map(input => [input.name,[...(input.files ?? [])]]));
+    const oldIds = new Set(state.resources.map(resource => resource.id));
+    const generic = form.id === 'receipt-generic-form';
+    await perform('正在读取原始文件、计算摘要并核对回执…', async () => {
+      const receipt = generic ? await buildGenericReceipt(data,groups) : await buildBioNexusReceipt(data,groups);
+      receiveState(await bridge.act({ type:'import_computational_receipt',claimId,receipt,rationale },revision));
+      formDrafts.delete(draftKey); intakeFileDrafts.delete(draftKey);
+      root.querySelector(`#${form.id}`)?.removeAttribute('data-draft-key');
+      const added = state!.resources.find(resource => !oldIds.has(resource.id));
+      if (added) { selectedResourceId = added.id; checkedResources().add(added.id); }
+      setNotice('success','计算回执已导入，校验层级与失败记录已保存。请核对本论断及依赖下游的重审事项；这次导入没有执行计算。');
+    });
+    return;
+  }
+  if (form.id === 'doi-verification-form') {
+    let input: ReturnType<typeof buildDoiInput>;
+    try { input = buildDoiInput(data); } catch (error) { setNotice('error',errorText(error)); render(); return; }
+    const claimId = selectedClaimId, revision = state.revision;
+    const oldIds = new Set(state.resources.map(resource => resource.id));
+    await perform(input.mode === 'registry' ? '正在查询 DOI 注册记录并逐项比对；连接失败会明确保留为未知…' : '正在检查 DOI 格式；不会查询注册记录…', async () => {
+      receiveState(await bridge.verifyDoi(input,claimId,revision));
+      const added = state!.resources.find(resource => !oldIds.has(resource.id));
+      if (added) { selectedResourceId = added.id; checkedResources().add(added.id); }
+      setNotice('success',input.mode === 'syntax_only' ? 'DOI 格式检查已保存；存在性、元数据与内容支持均未核验。' : 'DOI 查询记录已保存。请按下面的核验层级查看找到、缺失、不一致或未知结果；引用内容支持仍未核验。');
+    });
+    return;
+  }
   if (form.id === 'staged-file-form' && stagedFile) {
     const file = stagedFile;
     const content = String(data.get('content') ?? '');
@@ -566,6 +806,44 @@ root.addEventListener('submit', async event => {
   }
   const rationale = String(data.get('rationale') ?? '').trim();
   if (!rationale) { setNotice('error', '请填写具体理由，不能只有空白字符。'); render(); return; }
+  const finishForm = (saved: boolean) => {
+    if (!saved) return;
+    const key = formDraftKey(form);
+    formDrafts.delete(key);
+    for (const current of root.querySelectorAll<HTMLFormElement>('form[data-draft-key]')) if (formDraftKey(current) === key) current.removeAttribute('data-draft-key');
+    render();
+  };
+  if (form.id === 'add-relation-form') {
+    const sourceClaimId = String(data.get('sourceClaimId')), targetClaimId = String(data.get('targetClaimId'));
+    if (sourceClaimId === targetClaimId) { setNotice('error','请选择两个不同的论断。'); render(); return; }
+    finishForm(await act({ type:'add_claim_relation',sourceClaimId,targetClaimId,kind:String(data.get('kind')),rationale },'关系已保存。依赖前提发生变化时，下游论断会进入局部重审。'));
+    return;
+  }
+  if (form.classList.contains('remove-relation-form')) {
+    finishForm(await act({ type:'remove_claim_relation',relationId:form.dataset.relationId,rationale },'关系已移除并保留历史记录。既有的待重审事项仍需核对。'));
+    return;
+  }
+  if (form.id === 'claim-disposition-form') {
+    const disposition = String(data.get('disposition'));
+    finishForm(await act({ type:'set_claim_disposition',claimId:selectedClaimId,disposition,rationale },disposition === 'rejected' ? '论断已驳回；依赖它的下游论断已标记需要重审。' : '论断已恢复使用；证据上限仍待独立评估。'));
+    return;
+  }
+  if (form.id === 'acknowledge-review-form') {
+    finishForm(await act({ type:'acknowledge_re_review',claimId:selectedClaimId,rationale },'局部重审记录已保存；这不会自动确认科学结论。'));
+    return;
+  }
+  if (form.classList.contains('evidence-link-form')) {
+    const resourceIds = [...data.entries()].filter(([key]) => key.startsWith('link_')).map(([,value]) => String(value));
+    finishForm(await act({ type:'link_evidence_requirement',claimId:selectedClaimId,requirementId:form.dataset.requirementId,resourceIds,rationale },resourceIds.length ? '材料已关联到这项证据需求；内容及充分性仍待核验。' : '已清除这项需求的材料关联；证据文件仍保留。'));
+    return;
+  }
+  if (form.id === 'revision-proposal-form') {
+    const acceptText = data.has('acceptText'), acceptScope = data.has('acceptScope');
+    const evidenceNeedIds = [...data.entries()].filter(([key]) => key.startsWith('need_')).map(([,value]) => String(value));
+    if (!acceptText && !acceptScope && !evidenceNeedIds.length) { setNotice('error','请至少选择一项要采纳的文字、范围或补证计划。'); render(); return; }
+    finishForm(await act({ type:'apply_revision_proposal',findingId:form.dataset.findingId,acceptText,acceptScope,evidenceNeedIds,rationale },'选中的修改已记录。补证计划会进入清单；未选中部分仍保留为候选。'));
+    return;
+  }
   if (form.id === 'decision-form') {
     const decision = String(data.get('decision'));
     const conditions = String(data.get('conditions') ?? '').split('\n').map(x => x.trim()).filter(Boolean);
@@ -576,8 +854,9 @@ root.addEventListener('submit', async event => {
     const text = String(data.get('text') ?? '').trim();
     if (!text) { setNotice('error', '论断内容不能为空。'); render(); return; }
     const claim = currentClaim();
-    if (claim?.text !== data.get('baselineText') || claim.scope !== data.get('baselineScope')) { setNotice('error', '这项论断已被其他操作更新。你的草稿仍保留；请先复制草稿并刷新页面，核对新内容后再提交。'); render(); return; }
-    const saved = await act({ type: 'revise_claim', claimId: selectedClaimId, text, scope: String(data.get('scope')), rationale }, '论断已修订。请重新运行检查以更新发现。');
+    if (claim?.text !== data.get('baselineText') || claim.scope !== data.get('baselineScope') || metadataSignature(claim.metadata) !== data.get('baselineMetadata')) { setNotice('error', '这项论断或审查信息已被其他操作更新。你的草稿仍保留；请先复制草稿并刷新页面，核对新内容后再提交。'); render(); return; }
+    const metadata = metadataFromValues(Object.fromEntries([...data].map(([key, value]) => [key, String(value)])));
+    const saved = await act({ type: 'revise_claim', claimId: selectedClaimId, text, scope: String(data.get('scope')), metadata, rationale }, '论断与审查信息已保存。请重新运行检查以更新报告和发现。');
     if (saved) { formDrafts.delete(`${activeSessionId}::revise:${selectedClaimId}`); root.querySelector('#revise-form')?.removeAttribute('data-draft-key'); render(); }
   }
   if (form.id === 'new-claim-form') {
@@ -585,7 +864,8 @@ root.addEventListener('submit', async event => {
     if (!text) { setNotice('error', '论断内容不能为空。'); render(); return; }
     const revision = state.revision;
     await perform('正在创建论断…', async () => {
-      receiveState(await bridge.act({ type: 'create_claim', text, scope: String(data.get('scope')), rationale }, revision));
+      const metadata = metadataFromValues(Object.fromEntries([...data].map(([key, value]) => [key, String(value)])));
+      receiveState(await bridge.act({ type: 'create_claim', text, scope: String(data.get('scope')), metadata, rationale }, revision));
       selectedClaimId = state!.claims[state!.claims.length - 1]?.id ?? selectedClaimId;
       selectedFindingId = ''; selectedResourceId = ''; query = ''; creatingClaim = false; reviewTab = 'review'; section = 'review';
       formDrafts.delete(`${activeSessionId}::new-claim`);
@@ -608,6 +888,9 @@ window.addEventListener('locus-error', event => {
   const message = (event as CustomEvent<{ message?: string }>).detail?.message;
   setNotice('error', typeof message === 'string' ? message : '宿主状态校验失败，请刷新后重试。'); render();
 });
+window.addEventListener('locus-feedback', refreshFeedbackView);
+const feedbackClock = setInterval(() => { if (!document.hidden) refreshFeedbackView(); }, 1000);
+window.addEventListener('pagehide', () => clearInterval(feedbackClock), { once: true });
 window.addEventListener('locus-file', event => {
   const file = (event as CustomEvent<PickedFile>).detail;
   if (!file || typeof file.name !== 'string' || typeof file.content !== 'string') return;

@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ReviewStore } from '../src/domain.js';
+import { sha256 } from '../src/computational-receipts.js';
+import { evidencePlan } from '../src/evidence-plan.js';
+import { buildReplaySteps } from '../src/replay.js';
+
+const researcher={kind:'researcher' as const,id:'local-ui-unverified'};
+test('receipt attachment invalidates only the affected dependency branch and replay shows bounded records',async()=>{
+  const store=new ReviewStore({initial:{projectId:'test',title:'Receipt workflow'}});
+  const act=(action:unknown)=>store.act(action,store.getState().revision,researcher);
+  for(const text of ['Source','Dependent','Unrelated'])act({type:'create_claim',text,scope:'sample',rationale:'Synthetic fixture'});
+  const [source,dependent,unrelated]=store.getState().claims;
+  act({type:'add_claim_relation',sourceClaimId:source!.id,targetClaimId:dependent!.id,kind:'depends_on',rationale:'Synthetic dependency'});
+  const bytes='synthetic test bytes';
+  const reference={path:'test.txt',sha256:sha256(bytes)};
+  let state=act({type:'import_computational_receipt',claimId:source!.id,rationale:'Test attachment only',receipt:{format:'generic',files:[{path:'test.txt',contentBase64:Buffer.from(bytes).toString('base64')}],manifest:{schema:'locus.computational-receipt.v1',tool:{name:'Fixture',version:'test'},status:'failed',code:reference,inputs:[reference],outputs:[],failures:[{stage:'fit',message:'Synthetic failure'}]}}});
+  assert.ok(state.reReview?.some(flag=>flag.claimId===dependent!.id&&flag.status==='pending'));
+  assert.ok(!state.reReview?.some(flag=>flag.claimId===unrelated!.id));
+  const plan=evidencePlan(state,source!.id);
+  assert.equal(plan.find(item=>item.id.endsWith(':binding'))!.status,'missing');
+  assert.equal(plan.find(item=>item.id.endsWith(':execution'))!.status,'needs_review');
+  const replay=buildReplaySteps(state).at(-1)!;
+  assert.equal(replay.availability,'complete');assert.match(replay.changes[0]!.after!,/Synthetic failure/);
+  assert.doesNotMatch(replay.changes[0]!.after!,/contentBase64/);
+  state=await store.verifyDoi(unrelated!.id,{doi:'10.1234/synthetic',mode:'syntax_only'},state.revision,{fetchImpl:async()=>{throw Error('must not query');}});
+  assert.equal(evidencePlan(state,unrelated!.id).find(item=>item.id==='baseline:source')!.status,'missing','DOI syntax is not original research evidence');
+  assert.equal(evidencePlan(state,unrelated!.id).find(item=>item.id.endsWith(':citation'))!.status,'missing');
+  const doiReplay=buildReplaySteps(state).at(-1)!;
+  assert.equal(doiReplay.availability,'complete');assert.match(doiReplay.summary,/not_checked/);
+  assert.ok(state.claims.every(claim=>claim.evidenceCeiling==='NOT_ASSESSED'));
+});

@@ -17,10 +17,13 @@ try {
   cpSync(join(root, market.plugins[0].source.path), plugin, { recursive: true });
   assert.equal(existsSync(join(plugin, 'node_modules')), false);
   assert.equal(existsSync(join(plugin, '.locus')), false);
+  for (const match of readFileSync(join(plugin,'README.md'),'utf8').matchAll(/\]\((docs\/[^)#]+)(?:#[^)]*)?\)/g)) assert.ok(existsSync(join(plugin,match[1])),`Broken packaged guide link: ${match[1]}`);
   const config = JSON.parse(readFileSync(join(plugin, 'mcp.json'), 'utf8'));
   assert.deepEqual(config.mcpServers['research-locus'].args, ['${PLUGIN_ROOT}/scripts/launch.mjs']);
   const build = JSON.parse(readFileSync(join(plugin, 'BUILD.json'), 'utf8'));
   for (const [path, expected] of Object.entries(build.sha256)) assert.equal(createHash('sha256').update(readFileSync(join(plugin,path))).digest('hex'), expected);
+  const skillCheck = spawnSync(process.execPath, [join(plugin, 'skills/co-review/scripts/validate-finding.mjs'), '--self-test'], { cwd: plugin, encoding: 'utf8', timeout: 10000, windowsHide: true });
+  assert.equal(skillCheck.status, 0, skillCheck.stderr);
   const smoke = spawnSync(process.execPath, [join(root, 'scripts/smoke-stdio.mjs')], { cwd: root, env: { ...process.env, LOCUS_PLUGIN_ROOT: plugin }, encoding: 'utf8', timeout: 30000, windowsHide: true });
   assert.equal(smoke.status, 0, smoke.stderr);
   const stdio = JSON.parse(smoke.stdout);
@@ -38,7 +41,7 @@ try {
   const html=await (await fetch(`http://127.0.0.1:${port}/`)).text();
   const normalize=text=>text.replace(/name="locus-ui-token" content="[^"]+"/,'name="locus-ui-token" content="TOKEN"');
   assert.equal(normalize(html),normalize(readFileSync(join(plugin,'dist/app.html'),'utf8')));
-  const report={status:'PASS',version:build.version,stdio,http:'PASS',noNodeModules:true,pathWithSpaces:true,marketplaceManifest:'PASS',buildHashes:'PASS',nativeHostAcceptance:'NOT_RUN'};
+  const report={status:'PASS',version:build.version,stdio,http:'PASS',noNodeModules:true,pathWithSpaces:true,marketplaceManifest:'PASS',buildHashes:'PASS',skillStructureCheck:'PASS',nativeHostAcceptance:'NOT_RUN'};
   mkdirSync(join(root,'artifacts'),{recursive:true});
   writeFileSync(join(root,'artifacts/marketplace-verification.json'),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify(report,null,2));

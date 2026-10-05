@@ -61,24 +61,25 @@ test('pause blocks deterministic checks and asynchronous reviewer result admissi
   assert.equal(checked.findings.length, 3);
 });
 
-test('revisions invalidate findings and decisions, reject stale callbacks, and retain history', () => {
+test('revisions invalidate only the changed claim, reject stale callbacks, and retain history', () => {
   const store = new ReviewStore();
   const initial = store.getState();
   const decided = store.act({ type: 'intervene', findingId: initial.findings[0]!.id, decision: 'defer', rationale: 'Need more information' }, 0, researcher);
   const revised = store.act({ type: 'revise_claim', claimId: 'claim-causal', text: 'Pathway Y is associated with resistance in this cohort.', scope: 'cohort', rationale: 'Narrow causal wording' }, decided.revision, researcher);
   assert.notEqual(revised.snapshotHash, initial.snapshotHash);
-  assert.ok(revised.findings.every(finding => finding.status === 'stale'));
-  assert.equal(revised.decisions[0]!.status, 'stale');
+  assert.equal(revised.findings.find(finding => finding.claimId === 'claim-causal')!.status, 'stale');
+  assert.ok(revised.findings.filter(finding => finding.claimId !== 'claim-causal').every(finding => finding.status === 'active'));
+  assert.equal(revised.decisions[0]!.status, 'current', 'an unrelated claim decision survives the revision');
   assert.equal(revised.snapshots.length, 2);
   const previousSnapshot = revised.snapshots.find(item => item.hash === initial.snapshotHash)!;
   assert.equal(previousSnapshot.claims[1]!.text, initial.claims[1]!.text);
   assert.equal(previousSnapshot.claims[1]!.scope, 'causal');
   assert.deepEqual(previousSnapshot.resourceRefs.map(item => item.sha256), initial.resources.map(item => item.sha256));
-  assert.throws(() => store.act({ type: 'intervene', findingId: initial.findings[0]!.id, decision: 'dismiss', rationale: 'Old context' }, revised.revision, researcher), errorCode('STALE_SNAPSHOT'));
+  assert.throws(() => store.act({ type: 'intervene', findingId: initial.findings.find(finding => finding.claimId === 'claim-causal')!.id, decision: 'dismiss', rationale: 'Old context' }, revised.revision, researcher), errorCode('STALE_SNAPSHOT'));
   assert.throws(() => store.act({ type: 'add_finding', claimId: 'claim-design', title: 'Old callback', rationale: 'Old snapshot', severity: 'warning', category: 'design', snapshotHash: initial.snapshotHash, resourceIds: [] }, revised.revision, agent), errorCode('STALE_SNAPSHOT'));
   const checked = store.act({ type: 'run_review' }, revised.revision, agent);
   assert.equal(checked.findings.filter(finding => finding.status === 'active').length, 2);
-  assert.equal(checked.findings.filter(finding => finding.status === 'stale').length, 3);
+  assert.equal(checked.findings.filter(finding => finding.status === 'stale').length, 1);
   assert.equal(checked.claims[1]!.evidenceCeiling, 'NOT_ASSESSED');
 });
 

@@ -1,0 +1,320 @@
+{
+  "schemaVersion": "research-locus.review.v1",
+  "projectId": "synthetic-co-review-demo",
+  "title": "Research Locus · Synthetic co-review study",
+  "fixture": true,
+  "fixtureNotice": "Synthetic illustrative workspace. Checks inspect declared metadata only, never execute statistics or an LLM. Human inputs are recorded declarations; identities are not independently authenticated. This mixed demo workspace remains synthetic after attachments.",
+  "revision": 0,
+  "reviewStatus": "active",
+  "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+  "resources": [
+    {
+      "id": "fixture-notes",
+      "name": "synthetic-study-notes.txt",
+      "mediaType": "text/plain",
+      "content": "SYNTHETIC TEACHING FIXTURE — no patient or experimental data.\nClaim 1: two donors; cell-level analysis metadata.\nClaim 2: observational result without declared perturbation.\nClaim 3: deliberately mismatched source mapping.\n",
+      "sha256": "ff189209fa6f294545929cce72d4833cc080c3f96eee63630928668efa822b42",
+      "sourceKind": "synthetic_fixture"
+    }
+  ],
+  "claims": [
+    {
+      "id": "claim-design",
+      "text": "The treatment increases gene X expression across the patient population.",
+      "scope": "population",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "metadata": {
+        "biologicalReplicates": 2,
+        "analysisUnit": "cell"
+      },
+      "evidenceCeiling": "NOT_ASSESSED"
+    },
+    {
+      "id": "claim-causal",
+      "text": "Pathway Y drives resistance to treatment.",
+      "scope": "causal",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "metadata": {
+        "perturbation": false
+      },
+      "evidenceCeiling": "NOT_ASSESSED"
+    },
+    {
+      "id": "claim-figure",
+      "text": "Figure 3 accurately depicts the selected differential-expression table.",
+      "scope": "sample",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "metadata": {
+        "figureSourceMatched": false
+      },
+      "evidenceCeiling": "NOT_ASSESSED"
+    }
+  ],
+  "snapshots": [
+    {
+      "projectId": "synthetic-co-review-demo",
+      "claims": [
+        {
+          "id": "claim-design",
+          "text": "The treatment increases gene X expression across the patient population.",
+          "scope": "population",
+          "resourceIds": [
+            "fixture-notes"
+          ],
+          "metadata": {
+            "biologicalReplicates": 2,
+            "analysisUnit": "cell"
+          },
+          "evidenceCeiling": "NOT_ASSESSED"
+        },
+        {
+          "id": "claim-causal",
+          "text": "Pathway Y drives resistance to treatment.",
+          "scope": "causal",
+          "resourceIds": [
+            "fixture-notes"
+          ],
+          "metadata": {
+            "perturbation": false
+          },
+          "evidenceCeiling": "NOT_ASSESSED"
+        },
+        {
+          "id": "claim-figure",
+          "text": "Figure 3 accurately depicts the selected differential-expression table.",
+          "scope": "sample",
+          "resourceIds": [
+            "fixture-notes"
+          ],
+          "metadata": {
+            "figureSourceMatched": false
+          },
+          "evidenceCeiling": "NOT_ASSESSED"
+        }
+      ],
+      "rulesVersion": "metadata-checks.v1",
+      "resourceRefs": [
+        {
+          "id": "fixture-notes",
+          "name": "synthetic-study-notes.txt",
+          "mediaType": "text/plain",
+          "sha256": "ff189209fa6f294545929cce72d4833cc080c3f96eee63630928668efa822b42",
+          "sourceKind": "synthetic_fixture"
+        }
+      ],
+      "hash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4"
+    }
+  ],
+  "findings": [
+    {
+      "id": "c2125bc3-5c80-4d5a-ad15-dd37b4e1b33b",
+      "claimId": "claim-design",
+      "title": "分析单位与外推范围",
+      "rationale": "声明以细胞为统计分析单位，却作队列或人群层面的结论。需要核对独立重复及嵌套结构；本规则未重算统计，也不直接认定伪重复。\n建议：说明供体／个体层级的独立性、聚合或层级模型；必要时缩小外推范围。\n尚未填写声明依据，不能视为已核实事实。",
+      "severity": "critical",
+      "category": "design",
+      "resourceIds": [],
+      "ruleId": "META-DESIGN-001",
+      "rulesVersion": "metadata-checks.v2",
+      "source": "deterministic_check",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "status": "active"
+    },
+    {
+      "id": "cd67bdc2-625d-42aa-8254-bdf464956058",
+      "claimId": "claim-causal",
+      "title": "因果论断与实验声明",
+      "rationale": "研究者明确声明没有扰动或干预实验，却作因果结论。需提供其他因果识别依据或限定措辞；本规则不排除其他有效设计。\n建议：补充因果识别假设和验证依据，或改为关联性论断。\n尚未填写声明依据，不能视为已核实事实。",
+      "severity": "critical",
+      "category": "claim_scope",
+      "resourceIds": [],
+      "ruleId": "META-CAUSAL-001",
+      "rulesVersion": "metadata-checks.v2",
+      "source": "deterministic_check",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "status": "active"
+    },
+    {
+      "id": "855566f1-9fce-41b9-9b28-7592e61d8c83",
+      "claimId": "claim-figure",
+      "title": "图表与源数据对应",
+      "rationale": "研究者明确声明图表与源数据不匹配。需核对图、表和生成流程；未进行图像分析或文件内容比对。\n建议：定位图表编号、源文件和生成步骤，修正对应关系后重新检查。\n尚未填写声明依据，不能视为已核实事实。",
+      "severity": "warning",
+      "category": "provenance",
+      "resourceIds": [],
+      "ruleId": "META-SOURCE-001",
+      "rulesVersion": "metadata-checks.v2",
+      "source": "deterministic_check",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "status": "active"
+    }
+  ],
+  "decisions": [],
+  "events": [
+    {
+      "id": "a0a56756-0d9b-4a0f-9301-676f71d66432",
+      "revision": 0,
+      "at": "2026-10-05T11:30:57.280Z",
+      "actor": {
+        "kind": "agent",
+        "id": "system:synthetic-fixture"
+      },
+      "action": {
+        "type": "fixture_created"
+      },
+      "previousHash": null,
+      "stateHash": "1fc994118517041aef74085504d1c98b7796af447a6f486cde9c44649efb0632",
+      "hash": "a08bd74ed6eef06b863de6a4808c9af5934f8fadf81172cb18924e83e1d31fed"
+    }
+  ],
+  "scientificAuthorization": "NONE",
+  "metadataReviews": [
+    {
+      "rulesVersion": "metadata-checks.v2",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "revision": 0,
+      "checkedAt": "2026-10-05T11:30:57.279Z",
+      "checks": [
+        {
+          "claimId": "claim-design",
+          "declared": {
+            "biologicalReplicates": 2,
+            "analysisUnit": "cell"
+          },
+          "missingFields": [],
+          "nextStep": "说明供体／个体层级的独立性、聚合或层级模型；必要时缩小外推范围。",
+          "outcome": "flagged",
+          "ruleId": "META-DESIGN-001",
+          "title": "分析单位与外推范围",
+          "rationale": "声明以细胞为统计分析单位，却作队列或人群层面的结论。需要核对独立重复及嵌套结构；本规则未重算统计，也不直接认定伪重复。",
+          "severity": "critical",
+          "category": "design"
+        },
+        {
+          "claimId": "claim-design",
+          "declared": {
+            "biologicalReplicates": 2,
+            "analysisUnit": "cell"
+          },
+          "missingFields": [],
+          "nextStep": "",
+          "outcome": "not_applicable",
+          "ruleId": "META-CAUSAL-001",
+          "title": "因果论断与实验声明",
+          "rationale": "当前范围未声明为因果结论，本规则不适用；未自动分析文字中的因果措辞。",
+          "severity": "critical",
+          "category": "claim_scope"
+        },
+        {
+          "claimId": "claim-design",
+          "declared": {
+            "biologicalReplicates": 2,
+            "analysisUnit": "cell"
+          },
+          "missingFields": [
+            "figureApplicable"
+          ],
+          "nextStep": "先说明本论断是否涉及图表与源数据对应；不涉及可明确选择“不涉及”。",
+          "outcome": "needs_input",
+          "ruleId": "META-SOURCE-001",
+          "title": "图表与源数据对应",
+          "rationale": "图表适用性或对应情况尚不明确，不能当作来源一致。",
+          "severity": "warning",
+          "category": "provenance"
+        },
+        {
+          "claimId": "claim-causal",
+          "declared": {
+            "perturbation": false
+          },
+          "missingFields": [],
+          "nextStep": "",
+          "outcome": "not_applicable",
+          "ruleId": "META-DESIGN-001",
+          "title": "分析单位与外推范围",
+          "rationale": "当前声明的范围不是队列或人群外推，本规则不适用。",
+          "severity": "critical",
+          "category": "design"
+        },
+        {
+          "claimId": "claim-causal",
+          "declared": {
+            "perturbation": false
+          },
+          "missingFields": [],
+          "nextStep": "补充因果识别假设和验证依据，或改为关联性论断。",
+          "outcome": "flagged",
+          "ruleId": "META-CAUSAL-001",
+          "title": "因果论断与实验声明",
+          "rationale": "研究者明确声明没有扰动或干预实验，却作因果结论。需提供其他因果识别依据或限定措辞；本规则不排除其他有效设计。",
+          "severity": "critical",
+          "category": "claim_scope"
+        },
+        {
+          "claimId": "claim-causal",
+          "declared": {
+            "perturbation": false
+          },
+          "missingFields": [
+            "figureApplicable"
+          ],
+          "nextStep": "先说明本论断是否涉及图表与源数据对应；不涉及可明确选择“不涉及”。",
+          "outcome": "needs_input",
+          "ruleId": "META-SOURCE-001",
+          "title": "图表与源数据对应",
+          "rationale": "图表适用性或对应情况尚不明确，不能当作来源一致。",
+          "severity": "warning",
+          "category": "provenance"
+        },
+        {
+          "claimId": "claim-figure",
+          "declared": {
+            "figureSourceMatched": false
+          },
+          "missingFields": [],
+          "nextStep": "",
+          "outcome": "not_applicable",
+          "ruleId": "META-DESIGN-001",
+          "title": "分析单位与外推范围",
+          "rationale": "当前声明的范围不是队列或人群外推，本规则不适用。",
+          "severity": "critical",
+          "category": "design"
+        },
+        {
+          "claimId": "claim-figure",
+          "declared": {
+            "figureSourceMatched": false
+          },
+          "missingFields": [],
+          "nextStep": "",
+          "outcome": "not_applicable",
+          "ruleId": "META-CAUSAL-001",
+          "title": "因果论断与实验声明",
+          "rationale": "当前范围未声明为因果结论，本规则不适用；未自动分析文字中的因果措辞。",
+          "severity": "critical",
+          "category": "claim_scope"
+        },
+        {
+          "claimId": "claim-figure",
+          "declared": {
+            "figureSourceMatched": false
+          },
+          "missingFields": [],
+          "nextStep": "定位图表编号、源文件和生成步骤，修正对应关系后重新检查。",
+          "outcome": "flagged",
+          "ruleId": "META-SOURCE-001",
+          "title": "图表与源数据对应",
+          "rationale": "研究者明确声明图表与源数据不匹配。需核对图、表和生成流程；未进行图像分析或文件内容比对。",
+          "severity": "warning",
+          "category": "provenance"
+        }
+      ]
+    }
+  ]
+}

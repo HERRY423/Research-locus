@@ -1,0 +1,180 @@
+{
+  "schemaVersion": "research-locus.review.v1",
+  "projectId": "synthetic-co-review-demo",
+  "title": "Research Locus · Synthetic co-review study",
+  "fixture": true,
+  "fixtureNotice": "Synthetic illustrative workspace. Checks inspect declared metadata only, never execute statistics or an LLM. Human inputs are recorded declarations; identities are not independently authenticated. This mixed demo workspace remains synthetic after attachments.",
+  "revision": 0,
+  "reviewStatus": "active",
+  "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+  "resources": [
+    {
+      "id": "fixture-notes",
+      "name": "synthetic-study-notes.txt",
+      "mediaType": "text/plain",
+      "content": "SYNTHETIC TEACHING FIXTURE — no patient or experimental data.\nClaim 1: two donors; cell-level analysis metadata.\nClaim 2: observational result without declared perturbation.\nClaim 3: deliberately mismatched source mapping.\n",
+      "sha256": "ff189209fa6f294545929cce72d4833cc080c3f96eee63630928668efa822b42",
+      "sourceKind": "synthetic_fixture"
+    }
+  ],
+  "claims": [
+    {
+      "id": "claim-design",
+      "text": "The treatment increases gene X expression across the patient population.",
+      "scope": "population",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "metadata": {
+        "biologicalReplicates": 2,
+        "analysisUnit": "cell"
+      },
+      "evidenceCeiling": "NOT_ASSESSED"
+    },
+    {
+      "id": "claim-causal",
+      "text": "Pathway Y drives resistance to treatment.",
+      "scope": "causal",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "metadata": {
+        "perturbation": false
+      },
+      "evidenceCeiling": "NOT_ASSESSED"
+    },
+    {
+      "id": "claim-figure",
+      "text": "Figure 3 accurately depicts the selected differential-expression table.",
+      "scope": "sample",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "metadata": {
+        "figureSourceMatched": false
+      },
+      "evidenceCeiling": "NOT_ASSESSED"
+    }
+  ],
+  "snapshots": [
+    {
+      "projectId": "synthetic-co-review-demo",
+      "claims": [
+        {
+          "id": "claim-design",
+          "text": "The treatment increases gene X expression across the patient population.",
+          "scope": "population",
+          "resourceIds": [
+            "fixture-notes"
+          ],
+          "metadata": {
+            "biologicalReplicates": 2,
+            "analysisUnit": "cell"
+          },
+          "evidenceCeiling": "NOT_ASSESSED"
+        },
+        {
+          "id": "claim-causal",
+          "text": "Pathway Y drives resistance to treatment.",
+          "scope": "causal",
+          "resourceIds": [
+            "fixture-notes"
+          ],
+          "metadata": {
+            "perturbation": false
+          },
+          "evidenceCeiling": "NOT_ASSESSED"
+        },
+        {
+          "id": "claim-figure",
+          "text": "Figure 3 accurately depicts the selected differential-expression table.",
+          "scope": "sample",
+          "resourceIds": [
+            "fixture-notes"
+          ],
+          "metadata": {
+            "figureSourceMatched": false
+          },
+          "evidenceCeiling": "NOT_ASSESSED"
+        }
+      ],
+      "rulesVersion": "metadata-checks.v1",
+      "resourceRefs": [
+        {
+          "id": "fixture-notes",
+          "name": "synthetic-study-notes.txt",
+          "mediaType": "text/plain",
+          "sha256": "ff189209fa6f294545929cce72d4833cc080c3f96eee63630928668efa822b42",
+          "sourceKind": "synthetic_fixture"
+        }
+      ],
+      "hash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4"
+    }
+  ],
+  "findings": [
+    {
+      "claimId": "claim-design",
+      "title": "Biological replicate structure needs review",
+      "rationale": "Declared metadata uses cells as the analysis unit for a cohort/population claim. Inspect donor-level design and uncertainty. This metadata check does not recompute statistics or establish pseudoreplication.",
+      "severity": "critical",
+      "category": "design",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "ruleId": "META-DESIGN-001",
+      "id": "12f90de4-ef55-4da3-a6ef-fc9c8093703d",
+      "source": "deterministic_check",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "status": "active"
+    },
+    {
+      "claimId": "claim-causal",
+      "title": "Causal claim exceeds the declared experiment",
+      "rationale": "No perturbation is declared in the selected metadata. Supply causal identification evidence or narrow the claim; this check cannot establish whether an unreported experiment exists.",
+      "severity": "critical",
+      "category": "claim_scope",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "ruleId": "META-CAUSAL-001",
+      "id": "8f21c46b-ab4f-49e6-bf3d-3552f876e4f8",
+      "source": "deterministic_check",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "status": "active"
+    },
+    {
+      "claimId": "claim-figure",
+      "title": "Figure and source binding require reconciliation",
+      "rationale": "Fixture metadata explicitly declares that the figure source does not match. Review the original table/figure mapping. No image analysis was performed.",
+      "severity": "warning",
+      "category": "provenance",
+      "resourceIds": [
+        "fixture-notes"
+      ],
+      "ruleId": "META-SOURCE-001",
+      "id": "4ce1b35a-59f0-4fc2-8b97-aad30598c85d",
+      "source": "deterministic_check",
+      "snapshotHash": "91c80edec997993b9fb86d1bd968e41143d6ee71be396904f7c0e28f78839fa4",
+      "status": "active"
+    }
+  ],
+  "decisions": [],
+  "events": [
+    {
+      "id": "e9e5af08-0996-4952-8151-477db12ececf",
+      "revision": 0,
+      "at": "2026-10-05T11:30:12.148Z",
+      "actor": {
+        "kind": "agent",
+        "id": "system:synthetic-fixture"
+      },
+      "action": {
+        "type": "fixture_created"
+      },
+      "previousHash": null,
+      "stateHash": "072eced1f7618c273ca496b77e0584f462f96cbdbd6a813805b77b4411abe0ae",
+      "hash": "dedd8b2c1685efec60a6f7a0cc1f75cfaf4bcd4d507fc88099b909c75aee299b"
+    }
+  ],
+  "scientificAuthorization": "NONE"
+}

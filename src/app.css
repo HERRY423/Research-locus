@@ -910,3 +910,153 @@ select { padding: 8px 10px; border: 1px solid #000; border-radius: 5px; backgrou
   .diff-line { grid-template-columns: 24px 24px 20px minmax(0, 1fr); font-size: 10px; }
   .replay-diff-legend { gap: 8px 12px; }
 }
+/* Persistent review feedback stays next to the researcher's working controls. */
+.agent-review form { display: grid; gap: 9px; margin-top: 14px; }
+.agent-review form label { font-size: 12px; font-weight: 600; }
+.agent-review select, .agent-review textarea { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line, #dedede); border-radius: 7px; background: var(--surface, #fff); color: inherit; font: inherit; }
+.review-feedback { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line, #dedede); font-size: 12px; overflow-wrap: anywhere; }
+.feedback-connection { display: flex; align-items: center; gap: 7px; }
+.feedback-connection > span:nth-child(2) { flex: 1; }
+.connection-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.connection-dot.retrying, .connection-dot.connecting { background: transparent; border: 1px solid currentColor; }
+.feedback-heading { display: flex; justify-content: space-between; align-items: start; gap: 8px; margin-top: 15px; }
+.feedback-heading span, .feedback-meta, .feedback-boundary { font-size: 11px; color: var(--text-muted, #707070); }
+.feedback-heading span { white-space: nowrap; }
+.feedback-wait { border-left: 2px solid currentColor; padding-left: 9px; }
+.feedback-boundary { display: block; margin-top: 12px; line-height: 1.7; }
+.feedback-summary { display: flex; align-items: center; gap: 10px; padding: 10px 24px; border-bottom: 1px solid #e5e5e5; background: #fafafa; font-size: 12px; }
+.feedback-summary > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feedback-summary > strong { font-size: 11px; }
+.feedback-summary .text-button { flex-shrink: 0; }
+@media (max-width: 600px) { .feedback-summary { padding: 10px 16px; flex-wrap: wrap; } .feedback-summary > strong { width: 100%; } }
+.metadata-fields { border-top: 1px solid #dedede; margin: 18px 0; padding-top: 12px; }
+.metadata-fields legend { font-weight: 650; padding-right: 12px; }
+.metadata-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.metadata-grid > div { display: grid; align-content: start; gap: 6px; }
+.metadata-fields label { font-size: 12px; }
+.metadata-fields input, .metadata-fields select, .metadata-fields textarea { width: 100%; min-width: 0; padding: 10px; border: 1px solid #bbb; border-radius: 6px; background: white; }
+.metadata-review { padding: 18px 0; border-bottom: 1px solid #dedede; }
+.rule-check-list { display: grid; gap: 8px; margin-top: 12px; }
+.rule-check { padding: 12px; border: 1px solid #ddd; border-radius: 6px; }
+.rule-check.flagged { border-color: #333; }
+.rule-check.needs_input { border-style: dashed; }
+.rule-check summary { display: flex; justify-content: space-between; align-items: start; gap: 10px; cursor: pointer; }
+.rule-check summary span { flex-shrink: 0; font-size: 12px; }
+.rule-check p, .metadata-basis { margin-top: 10px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+.rule-missing { font-weight: 650; }
+@media (max-width: 600px) { .metadata-grid { grid-template-columns: 1fr; } }
+.design-card { padding: 20px 0; border-bottom: 1px solid var(--border, #ddd); }
+.design-card dl { display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:12px; margin:16px 0; }
+.design-card dt { color:#666; margin-bottom:5px; }
+.design-card dd { margin:0; overflow-wrap:anywhere; }
+.design-ack { display:flex; gap:10px; align-items:flex-start; margin-top:16px; }
+.design-ack input, .candidate input { width:16px; min-width:16px; height:16px; }
+.design-proposal { margin-top:18px; border:1px solid #222; padding:16px; }
+.candidate { border-bottom:1px solid #ddd; padding:12px 0; }
+.candidate label { display:block; }
+.candidate blockquote { margin:8px 0; padding:10px; background:#f6f6f6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.candidate footer { margin-top:8px; color:#666; font-size:12px; }
+@media(max-width:600px) { .design-card dl { grid-template-columns:1fr; } }
+/* Co-improvement keeps the next action beside its claim and evidence boundary. */
+.claim-status-label { display:block; margin-top:4px; font-size:10px; font-style:normal; font-weight:650; }
+.local-review-notice, .claim-disposition-banner { margin:18px 0; padding:16px; border:1px solid #222; border-left-width:4px; border-radius:5px; font-size:12px; line-height:1.8; }
+.local-review-notice h3 { margin-bottom:8px; font-size:14px; }
+.local-review-notice ul { padding-left:20px; }
+.local-review-notice li + li { margin-top:8px; }
+.local-review-notice .text-button { text-align:left; white-space:normal; }
+.claim-graph-section, .evidence-plan { padding:20px 0; border-bottom:1px solid #ddd; }
+.claim-graph-section > details > summary { display:flex; justify-content:space-between; gap:12px; align-items:baseline; cursor:pointer; }
+.claim-graph-section > details > summary > span { font-size:11px; }
+.claim-graph-section .form-help, .evidence-plan > .form-help { margin-top:10px; }
+.claim-graph-scroll { margin:15px 0; max-height:450px; overflow:auto; border:1px solid #ddd; border-radius:6px; background:#fafafa; }
+.claim-graph { width:100%; min-width:440px; display:block; overflow:visible; }
+.graph-node { cursor:pointer; }
+.graph-node rect { fill:#fff; stroke:#aaa; stroke-width:1.2; }
+.graph-node text { fill:#111; font-size:10px; font-family:inherit; pointer-events:none; }
+.graph-node .graph-node-status { font-size:9px; fill:#666; }
+.graph-node.selected rect { stroke:#000; stroke-width:2.2; }
+.graph-node.needs-review rect { stroke:#111; stroke-dasharray:5 3; }
+.graph-node:hover rect, .graph-node:focus-visible rect { fill:#eee; stroke:#000; stroke-width:2.5; }
+.graph-node:focus-visible { outline:none; }
+.graph-edge { fill:none; stroke:#555; stroke-width:1.6; }
+.graph-edge.depends_on { stroke:#111; stroke-width:2; }
+.graph-edge.supports { stroke-dasharray:7 4; }
+.graph-edge.contradicts { stroke-dasharray:2 4; }
+.graph-legend { display:flex; gap:18px; margin-top:14px; font-size:11px; }
+.graph-legend span:before { content:''; display:inline-block; width:22px; margin-right:5px; vertical-align:middle; border-top:2px solid; }
+.graph-legend .supports:before { border-top-style:dashed; }
+.graph-legend .contradicts:before { border-top-style:dotted; }
+.claim-relations > article { margin-bottom:12px; padding:12px; border:1px solid #e2e2e2; border-radius:5px; }
+.claim-relations > article > p:first-child { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+.claim-relations .text-button { font-size:12px; text-align:left; white-space:normal; }
+.relation-arrow { font-size:11px; font-weight:600; padding-left:8px; }
+.claim-relations details { margin-top:8px; font-size:11px; }
+.claim-disposition { margin-top:16px; padding-top:14px; border-top:1px dashed #ddd; }
+.claim-graph-section form, .local-review-notice form, .evidence-link-form, .revision-proposal form { display:grid; gap:11px; margin-top:12px; }
+.claim-graph-section form label, .local-review-notice form label, .evidence-link-form label, .revision-proposal form > fieldset > label { display:grid; gap:6px; font-size:12px; }
+.claim-graph-section textarea, .claim-graph-section select, .local-review-notice textarea, .evidence-link-form textarea, .revision-proposal textarea { width:100%; min-width:0; padding:9px; border:1px solid #aaa; border-radius:5px; background:#fff; font:inherit; }
+.relation-fields { display:grid; gap:10px; }
+.evidence-plan-items { display:grid; gap:8px; margin-top:14px; }
+.evidence-plan-item { padding:12px; border:1px solid #ddd; border-radius:6px; }
+.evidence-plan-item.missing { border-style:dashed; }
+.evidence-plan-item.needs_review { border-color:#222; border-left-width:3px; }
+.evidence-plan-item summary { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; cursor:pointer; }
+.evidence-plan-item summary strong { font-size:12px; }
+.evidence-plan-item summary span { font-size:11px; white-space:nowrap; }
+.evidence-plan-item p { margin-top:10px; font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
+.linked-evidence { display:grid; gap:6px; margin-top:10px; }
+.linked-evidence .text-button { font-size:12px; white-space:normal; text-align:left; }
+.evidence-link-form fieldset { display:grid; gap:10px; }
+.evidence-link-form legend { font-size:12px; font-weight:600; margin-bottom:9px; }
+.evidence-link-form label.evidence-link-option { display:flex; gap:8px; align-items:flex-start; }
+.evidence-link-option input, .proposal-part input { flex-shrink:0; width:15px; height:15px; margin-top:2px; }
+.revision-proposal { margin:22px 0; padding:15px; border:1px solid #222; border-radius:6px; font-size:12px; }
+.revision-proposal h3 { font-size:14px; margin-bottom:10px; }
+.revision-proposal p { margin:9px 0; line-height:1.8; overflow-wrap:anywhere; white-space:pre-wrap; }
+.revision-proposal form > fieldset { display:grid; gap:13px; }
+.proposal-part { padding-bottom:12px; border-bottom:1px solid #ddd; }
+.proposal-part > label { display:flex; align-items:flex-start; gap:8px; }
+.proposal-part .small-label { margin-bottom:4px; }
+.proposal-part .proposal-evidence-option { margin-top:12px; }
+.proposal-evidence-option small { display:block; margin-top:5px; font-size:10px; color:#666; }
+.revision-proposal details { margin-top:12px; }
+@media(max-width:600px) { .evidence-plan-item summary { flex-direction:column; gap:5px; } .claim-graph-section > details > summary { align-items:flex-start; flex-direction:column; gap:4px; } }
+.intake-summary { display:flex; gap:14px; justify-content:space-between; align-items:center; padding:16px 0; border-bottom:1px solid #ddd; font-size:12px; }
+.intake-summary p { margin-top:6px; color:#666; }
+.evidence-intake { padding:22px 0; border-top:1px solid #ddd; }
+.evidence-intake > .form-help { margin:10px 0 16px; }
+.evidence-intake > details { border:1px solid #ccc; padding:14px; border-radius:6px; margin-bottom:12px; }
+.evidence-intake summary { font-size:13px; font-weight:600; cursor:pointer; }
+.evidence-intake form > fieldset { display:grid; gap:13px; margin-top:15px; }
+.evidence-intake label { display:grid; gap:7px; font-size:12px; }
+.evidence-intake input, .evidence-intake textarea, .evidence-intake select { width:100%; min-width:0; border:1px solid #bbb; border-radius:5px; padding:9px; font:inherit; background:#fff; }
+.evidence-intake input[type=file] { padding:8px; font-size:11px; }
+.evidence-intake small { line-height:1.6; overflow-wrap:anywhere; color:#666; }
+.intake-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.intake-record { margin:18px 0; padding:16px; border:1px solid #999; border-radius:6px; font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
+.intake-record h3 { margin-bottom:12px; font-size:14px; }
+.intake-record p + p { margin-top:8px; }
+.intake-record-title { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; }
+.intake-record-title span { font-size:10px; color:#666; }
+.verification-layers { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0; }
+.verification-layers > div { padding:8px; border:1px solid #ddd; border-radius:4px; }
+.verification-layers dt { color:#666; font-size:11px; }
+.verification-layers dd { margin:4px 0 0; font-weight:550; }
+.actual-checks { margin:12px 0; padding:10px; background:#f4f4f4; }
+.intake-record details { margin-top:10px; }
+.intake-record summary { cursor:pointer; }
+.intake-record code { font-size:10px; white-space:normal; overflow-wrap:anywhere; }
+.intake-record pre { font-size:11px; padding:10px; margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; background:#f6f6f6; max-height:320px; overflow:auto; }
+.intake-record ul { margin:10px 0; padding-left:19px; }
+.doi-field-checks details { border-top:1px solid #ddd; padding-top:10px; }
+.doi-field-checks summary { display:flex; gap:12px; justify-content:space-between; }
+.doi-field-checks summary span { font-size:11px; }
+.doi-field-checks p, .doi-source, .receipt-artifact { margin-top:10px; }
+.doi-source { border-bottom:1px solid #ddd; padding-bottom:10px; }
+.receipt-origin { display:block; font-size:11px; margin:6px 0 12px; }
+.receipt-path { overflow-wrap:anywhere; color:#555; }
+.receipt-artifact { padding:10px; border:1px solid #ddd; border-radius:4px; }
+.receipt-artifact summary { font-size:12px; font-weight:500; }
+.receipt-failures { margin:12px 0; border-left:3px solid #222; padding-left:12px; }
+.receipt-failures h4 { font-size:12px; }
+@media(max-width:600px) { .intake-grid, .verification-layers { grid-template-columns:1fr; } .intake-summary { align-items:flex-start; flex-direction:column; } }

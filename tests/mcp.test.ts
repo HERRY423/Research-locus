@@ -50,6 +50,119 @@ function resourceText(result: Awaited<ReturnType<Client['readResource']>>): stri
   return content.text;
 }
 
+test('structured revision proposals cross MCP as candidates and only selected researcher items are adopted', async t => {
+  const { call, store } = await connected(t);
+  let state = store.getState();
+  const before = structuredClone(state.claims[0]);
+  const proposal = { text:'Synthetic sample-bounded observation', scope:'sample', evidenceNeeds:[{ id:'replication', category:'replication', description:'Provide an independent donor-level analysis.' }] };
+  const findingInput = { expectedRevision:state.revision, claimId:before.id, snapshotHash:state.snapshotHash, resourceIds:[], title:'Narrow the inference', rationale:'Synthetic test only', severity:'warning', category:'claim_scope', revisionProposal:proposal };
+  for (const revisionProposal of [{}, {text:''}, {scope:'approved'}, {evidenceNeeds:[{id:'x',category:'invalid',description:'x'}]}, {...proposal,approve:true}]) {
+    assert.equal((await call('locus.submit_finding',{...findingInput,revisionProposal})).isError,true);
+  }
+  state = stateFrom(await call('locus.submit_finding',findingInput));
+  assert.deepEqual(state.claims[0],before,'Saving a finding must never revise the claim');
+  const findingId = state.findings.at(-1)!.id;
+  const adopt = {type:'apply_revision_proposal',findingId,acceptText:false,acceptScope:true,evidenceNeedIds:['replication'],rationale:'Accept only the bounded scope and evidence plan.'};
+  assert.equal((await call('locus.ui_action',{token:'wrong',expectedRevision:state.revision,action:adopt})).isError,true);
+  state = stateFrom(await call('locus.ui_action',{token:TOKEN,expectedRevision:state.revision,action:adopt}));
+  assert.equal(state.claims[0].text,before.text);
+  assert.equal(state.claims[0].scope,'sample');
+  assert.equal(state.claims[0].evidenceNeeds?.length,1);
+  state = stateFrom(await call('locus.ui_action',{token:TOKEN,expectedRevision:state.revision,action:{...adopt,acceptText:true,acceptScope:false,evidenceNeedIds:[],rationale:'Now accept the remaining text.'}}));
+  assert.equal(state.claims[0].text,proposal.text);
+  const output = structured(await call('locus.state'));
+  const compact = output.state as Record<string,unknown>;
+  const plan = (compact.evidencePlans as Record<string,Array<{id:string;status:string}>>)[before.id];
+  assert.ok(plan.some(item=>item.id===`proposal:${findingId}:replication` && item.status==='missing'));
+  assert.ok(plan.some(item=>item.id==='baseline:assessment' && item.status==='needs_review'));
+  assert.equal(state.claims[0].evidenceCeiling,'NOT_ASSESSED');
+});
+
+test('scoped design extraction reads only selected evidence, proposes without writing metadata, and requires UI confirmation', async t => {
+  const {call,store}=await connected(t);
+  let state=store.getState();
+  const claim=state.claims[0], sessionId='legacy';
+  const selected=[claim.resourceIds[0]];
+  const request={token:TOKEN,sessionId,claimId:claim.id,snapshotHash:state.snapshotHash,resourceIds:selected,mode:'design',focus:'Extract design only'};
+  assert.equal((await call('locus.review_request',{...request,resourceIds:[]})).isError,true);
+  const run=structured(await call('locus.review_request',request)).run as {id:string};
+  const args={sessionId,runId:run.id,expectedRevision:state.revision,claimId:claim.id,snapshotHash:state.snapshotHash,resourceIds:selected};
+  const prepared=await call('locus.extract_design',args);
+  assert.notEqual(prepared.isError,true);
+  assert.equal(store.getState().revision,0,'Preparing extraction is read-only');
+  assert.equal((structured(prepared).selectedEvidence as unknown[]).length,1);
+  assert.equal(structured(prepared).unknownValue,'NOT_DECLARED');
+  const candidates=[{field:'biologicalReplicates',value:2,rationale:'Fixture explicitly says two donors.',evidence:[{resourceId:selected[0],quote:'two donors',locator:'Claim 1 fixture sentence'}]}];
+  assert.equal((await call('locus.extract_design',{...args,resourceIds:['not-selected'],candidates})).isError,true);
+  assert.equal((await call('locus.extract_design',{...args,candidates:[{...candidates[0],evidence:[{resourceId:selected[0],quote:'invented phrase',locator:'x'}]}]})).isError,true);
+  const submitted=await call('locus.extract_design',{...args,candidates});
+  state=stateFrom(submitted);
+  assert.equal(state.snapshotHash,args.snapshotHash);
+  assert.deepEqual(state.claims[0].metadata,claim.metadata);
+  const p=state.designProposals![0];
+  assert.equal(p.status,'proposed');
+  const runs=structured(await call('locus.review_status',{sessionId})).reviewRuns as Array<{phase:string;sequence:number}>;
+  assert.equal(runs[0].phase,'needs_input');
+  assert.equal((await call('locus.review_progress',{sessionId,runId:run.id,expectedSequence:runs[0].sequence,phase:'completed',message:'Pretend confirmed'})).isError,true);
+  assert.equal((await call('locus.ui_action',{token:'wrong',sessionId,expectedRevision:state.revision,action:{type:'confirm_design',proposalId:p.id,selectedFields:['biologicalReplicates'],rationale:'Confirmed'}})).isError,true);
+  state=stateFrom(await call('locus.ui_action',{token:TOKEN,sessionId,expectedRevision:state.revision,action:{type:'confirm_design',proposalId:p.id,selectedFields:['biologicalReplicates'],rationale:'Checked exact source sentence.'}}));
+  assert.equal(state.designProposals![0].status,'confirmed');
+  assert.equal(state.claims[0].metadata.biologicalReplicates,2);
+  assert.equal(state.events.at(-1)!.actor.kind,'researcher');
+  const finished=structured(await call('locus.review_status',{sessionId})).reviewRuns as Array<{phase:string}>;
+  assert.equal(finished[0].phase,'completed','Confirmation of an unchanged value must still finish extraction');
+});
+
+test('MCP review of a user-created session returns missing fields and then risks after declared metadata is edited', async t => {
+  const { call, catalog } = await connected(t);
+  const project = catalog.createProject('User study').projects.at(-1)!;
+  const created = catalog.createSession(project.id, 'Fresh review');
+  const sessionId = created.sessionId;
+  let state = stateFrom(await call('locus.ui_action', { token: TOKEN, sessionId, expectedRevision: 0, action: { type: 'create_claim', text: 'Population effect', scope: 'population', rationale: 'Review it' } }));
+  const review = await call('locus.review', { sessionId, expectedRevision: state.revision });
+  state = stateFrom(review);
+  assert.equal(state.fixture, false);
+  const report = structured(review).ruleReview as { checks: Array<{ outcome: string; missingFields: string[] }> };
+  assert.equal(report.checks[0].outcome, 'needs_input');
+  assert.deepEqual(report.checks[0].missingFields, ['analysisUnit', 'biologicalReplicates']);
+  assert.match(JSON.stringify(review.content), /信息不足/);
+  const invalid = await call('locus.ui_action', { token: TOKEN, sessionId, expectedRevision: state.revision, action: { type: 'revise_claim', claimId: state.claims[0].id, text: 'Population effect', metadata: { perturbation: 'false' }, rationale: 'Invalid type' } });
+  assert.equal(invalid.isError, true);
+  state = stateFrom(await call('locus.ui_action', { token: TOKEN, sessionId, expectedRevision: state.revision, action: { type: 'revise_claim', claimId: state.claims[0].id, text: 'Population effect', metadata: { analysisUnit: 'cell', biologicalReplicates: 4, figureApplicable: false }, rationale: 'Record actual design' } }));
+  const risks = await call('locus.review', { sessionId, expectedRevision: state.revision });
+  assert.equal((structured(risks).summary as { flagged: number }).flagged, 1);
+  assert.equal(stateFrom(risks).findings[0].ruleId, 'META-DESIGN-001');
+  assert.equal(stateFrom(risks).scientificAuthorization, 'NONE');
+});
+
+test('scoped review progress roundtrip keeps decisions human and rejects late or out-of-scope findings', async t => {
+  const { call, store, catalog } = await connected(t);
+  const state = store.getState(), claim = state.claims[0], sessionId = catalog.defaultSessionId;
+  const request = { token: TOKEN, sessionId, claimId: claim.id, resourceIds: [], snapshotHash: state.snapshotHash, mode: 'challenge', focus: 'Check alternatives' };
+  assert.equal((await call('locus.review_request', { ...request, token: 'wrong' })).isError, true);
+  const created = await call('locus.review_request', request);
+  const run = structured(created).run as { id: string; sequence: number };
+  assert.ok(run.id);
+  assert.equal((await call('locus.review_request', request)).isError, true);
+  const working = await call('locus.review_progress', { sessionId, runId: run.id, expectedSequence: run.sequence, phase: 'working', message: 'Checking only the selected scope' });
+  assert.equal(store.getState().revision, state.revision);
+  assert.equal(store.getState().decisions.length, state.decisions.length);
+  const finding = { sessionId, runId: run.id, expectedRevision: state.revision, claimId: claim.id, resourceIds: claim.resourceIds, snapshotHash: state.snapshotHash, title: 'Synthetic scope check', rationale: 'No selected source; limitations remain unknown.', severity: 'info', category: 'other' };
+  assert.ok(claim.resourceIds.length);
+  assert.equal((await call('locus.submit_finding', finding)).isError, true);
+  assert.equal(store.getState().revision, state.revision);
+  const saved = await call('locus.submit_finding', { ...finding, resourceIds: [] });
+  assert.notEqual(saved.isError, true);
+  const progress = (structured(await call('locus.review_status', { sessionId })).reviewRuns as Array<{ id: string; sequence: number; findingIds: string[] }>)[0];
+  assert.equal(progress.findingIds.length, 1);
+  const sequence = (structured(working).run as { sequence: number }).sequence;
+  assert.ok(progress.sequence > sequence);
+  assert.equal((await call('locus.review_progress', { sessionId, runId: run.id, expectedSequence: sequence, phase: 'completed', message: 'Stale finish' })).isError, true);
+  await call('locus.review_cancel', { token: TOKEN, sessionId, runId: run.id });
+  assert.equal((await call('locus.submit_finding', { ...finding, resourceIds: [], expectedRevision: store.getState().revision })).isError, true);
+  assert.equal(store.getState().findings.length, state.findings.length + 1);
+});
+
 test('official UI entrypoints, app metadata, and current dossier are discoverable over MCP', async t => {
   const { client, call, store } = await connected(t);
   const listed = await client.listTools();
@@ -403,7 +516,7 @@ test('host bridge preserves staged file and ETag when reopening its session, but
   };
   try {
     Object.defineProperty(globalThis, 'window', { value: browserWindow, configurable: true });
-    Object.defineProperty(globalThis, 'document', { value: { hidden: true, querySelector: () => ({ content: TOKEN }), documentElement: { style: { setProperty() {} } } }, configurable: true });
+    Object.defineProperty(globalThis, 'document', { value: Object.assign(new EventTarget(), { hidden: true, querySelector: () => ({ content: TOKEN }), documentElement: { style: { setProperty() {} } } }), configurable: true });
     for (const method of methods) Object.defineProperty(App.prototype, method, { value: overrides[method], writable: true, configurable: true });
     const bridge = await createBridge(() => {});
     assert.equal(bridge.mode, 'host');
@@ -433,5 +546,78 @@ test('host bridge preserves staged file and ETag when reopening its session, but
       if (original) Object.defineProperty(globalThis, key, original);
       else Reflect.deleteProperty(globalThis, key);
     }
+  }
+});
+
+test('host feedback handles unknown delivery, deduplicates polling and ignores delayed progress rollback', async t => {
+  const { call, store } = await connected(t);
+  const { App } = await import('@modelcontextprotocol/ext-apps');
+  const { createBridge } = await import('../src/bridge.js');
+  const keys = ['window', 'document'] as const;
+  const globals = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const methods = ['connect', 'getHostCapabilities', 'getHostContext', 'callServerTool', 'sendMessage'] as const;
+  const originals = new Map(methods.map(key => [key, Object.getOwnPropertyDescriptor(App.prototype, key)]));
+  class MockWindow extends EventTarget { parent = {}; }
+  const browserWindow = new MockWindow();
+  let sends = 0, stateCalls = 0, delay = false, failRead = false;
+  let release: ((result: unknown) => void) | undefined;
+  let prompt = '';
+  const initial = await call('locus.panel', { sessionId: 'legacy' });
+  const overrides: Record<string, unknown> = {
+    connect: async function(this: InstanceType<typeof App>) { this.ontoolresult?.(initial as never); },
+    getHostCapabilities: () => ({}), getHostContext: () => ({}),
+    callServerTool: async ({ name, arguments: args }: { name: string; arguments: Record<string, unknown> }) => {
+      if (name === 'locus.state') {
+        stateCalls++;
+        if (failRead) throw new Error('simulated disconnect');
+        if (delay) return new Promise(resolve => { release = resolve; });
+      }
+      return call(name, args);
+    },
+    sendMessage: async ({ content }: { content: Array<{ text: string }> }) => { sends++; prompt = content[0].text; if (sends === 1) throw new Error('lost transport acknowledgement'); return {}; },
+  };
+  try {
+    Object.defineProperty(globalThis, 'window', { value: browserWindow, configurable: true });
+    Object.defineProperty(globalThis, 'document', { value: Object.assign(new EventTarget(), { hidden: true, querySelector: () => ({ content: TOKEN }), documentElement: { style: { setProperty() {} } } }), configurable: true });
+    for (const method of methods) Object.defineProperty(App.prototype, method, { value: overrides[method], writable: true, configurable: true });
+    const bridge = await createBridge(() => {});
+    const state = await bridge.openSession('legacy'), claim = state.claims[0];
+    delay = true;
+    const firstPoll = bridge.refresh();
+    await bridge.refresh();
+    assert.equal(stateCalls, 1, 'No overlapping refreshes');
+    await assert.rejects(bridge.requestReview(state, claim.id, [], 'methods', 'Check independent units'), /未能确认消息/);
+    assert.equal(sends, 1);
+    assert.equal(bridge.feedback().runs.length, 1);
+    assert.match(prompt, /runId=/);
+    assert.match(prompt, /Check independent units/);
+    assert.match(prompt, /URI 仅为 \[\]/);
+    release!(initial); await firstPoll;
+    assert.equal(bridge.feedback().runs.length, 1, 'Old empty poll cannot hide a newly registered request');
+    delay = false;
+    const run = bridge.feedback().runs[0];
+    await call('locus.review_progress', { sessionId: 'legacy', runId: run.id, expectedSequence: run.sequence, phase: 'working', message: 'Read selected scope' });
+    await bridge.refresh();
+    assert.equal(bridge.feedback().runs[0].phase, 'working');
+    failRead = true; await bridge.refresh();
+    assert.equal(bridge.feedback().connection, 'retrying');
+    assert.equal(sends, 1, 'Reconnect never resends a message');
+    failRead = false; await bridge.refresh();
+    assert.equal(bridge.feedback().connection, 'connected');
+    await bridge.cancelReview(run.id);
+    assert.equal(bridge.feedback().runs[0].phase, 'cancelled');
+    await bridge.requestReview(store.getState(), claim.id, [], 'challenge', 'Reconsider the limitation');
+    assert.equal(sends, 2);
+    assert.equal(bridge.feedback().runs.at(-1)?.phase, 'queued');
+    await bridge.cancelReview(bridge.feedback().runs.at(-1)!.id);
+    await bridge.requestReview(store.getState(),claim.id,claim.resourceIds,'design','Extract design');
+    assert.match(prompt,/locus.extract_design/);
+    assert.match(prompt,/NOT_DECLARED/);
+    assert.match(prompt,/逐项勾选确认/);
+    assert.equal(bridge.feedback().runs.at(-1)?.mode,'design');
+  } finally {
+    browserWindow.dispatchEvent(new Event('pagehide'));
+    for (const method of methods) { const original = originals.get(method); if (original) Object.defineProperty(App.prototype, method, original); else Reflect.deleteProperty(App.prototype, method); }
+    for (const key of keys) { const original = globals.get(key); if (original) Object.defineProperty(globalThis, key, original); else Reflect.deleteProperty(globalThis, key); }
   }
 });

@@ -8,8 +8,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { ReviewStore, DomainError } from './domain.js';
 import { createMcpServer, catalogActionSchema } from './mcp.js';
 import { WorkspaceCatalog } from './catalog.js';
+import type { verifyDoi, DoiVerificationInput } from './doi-verification.js';
 
-export function createHttpWorkbench(store: ReviewStore, template: string, token = randomBytes(32).toString('hex'), catalog = new WorkspaceCatalog({ legacyStore: store })) {
+export function createHttpWorkbench(store: ReviewStore, template: string, token = randomBytes(32).toString('hex'), catalog = new WorkspaceCatalog({ legacyStore: store }), doiOptions?: Parameters<typeof verifyDoi>[1]) {
   const html = template.replaceAll('__LOCUS_UI_TOKEN__', token);
   const listeners = new Map<ServerResponse, { sessionId: string; revision: number; integrityError: boolean }>();
   const publish = () => {
@@ -47,7 +48,7 @@ export function createHttpWorkbench(store: ReviewStore, template: string, token 
     try {
       if (path === '/mcp') {
         if (req.method !== 'POST') { send(405, { error: 'Use MCP POST transport' }); return; }
-        const mcp = createMcpServer(store, html, token, catalog);
+        const mcp = createMcpServer(store, html, token, catalog, doiOptions);
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
         await mcp.connect(transport);
         res.on('close', () => { void transport.close(); void mcp.close(); publish(); });
@@ -71,15 +72,21 @@ export function createHttpWorkbench(store: ReviewStore, template: string, token 
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
         res.write(`data: ${JSON.stringify(state)}\n\n`); listeners.set(res, { sessionId: requestedSessionId ?? catalog.defaultSessionId, revision: state.revision, integrityError: false }); req.on('close', () => listeners.delete(res)); return;
       }
-      if (req.method === 'POST' && (path === '/api/action' || path === '/api/catalog/action')) {
+      if (req.method === 'POST' && (path === '/api/action' || path === '/api/catalog/action' || path === '/api/verify-doi')) {
         const supplied = req.headers['x-locus-ui'];
         if (typeof supplied !== 'string' || Buffer.byteLength(supplied) !== Buffer.byteLength(token) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(token))) { send(403, { error: 'UI channel token required' }); return; }
         if (!req.headers['content-type']?.startsWith('application/json')) { send(415, { error: 'JSON required' }); return; }
         const chunks: Buffer[] = []; let size = 0;
-        for await (const chunk of req) { size += chunk.length; if (size > 1_100_000) { send(413, { error: 'Payload too large' }); return; } chunks.push(chunk); }
+        const bodyLimit=path==='/api/action'?16*1024*1024:1_100_000;
+        for await (const chunk of req) { size += chunk.length; if (size > bodyLimit) { send(413, { error: 'Payload too large' }); return; } chunks.push(chunk); }
         let input: Record<string, unknown>;
         try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { send(400, { error: 'Invalid JSON' }); return; }
         if (!input || typeof input !== 'object' || Array.isArray(input)) { send(400, { error: 'JSON object required' }); return; }
+        if (path==='/api/verify-doi') {
+          if (Object.keys(input).some(key=>!['input','claimId','sessionId','expectedRevision'].includes(key)) || typeof input.claimId!=='string' || !Number.isInteger(input.expectedRevision)) {send(400,{error:'Expected DOI input, claimId, expectedRevision and optional sessionId only'});return;}
+          const state=await selectedStore(input.sessionId).verifyDoi(input.claimId,input.input as DoiVerificationInput,input.expectedRevision as number,doiOptions);
+          publish();send(200,state);return;
+        }
         if (path === '/api/catalog/action') {
           if (Object.keys(input).some(key => key !== 'action')) { send(400, { error: 'Expected catalog action only' }); return; }
           const action = catalogActionSchema.parse(input.action);

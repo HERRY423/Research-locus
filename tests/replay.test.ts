@@ -60,6 +60,9 @@ test('missing baseline or intermediate snapshot yields summaries and no invented
   const initial = store.getState();
   let state = store.act({ type: 'revise_claim', claimId: initial.claims[0]!.id, text: 'Second', rationale: 'Revision' }, 0, researcher);
   state = store.act({ type: 'revise_claim', claimId: initial.claims[0]!.id, text: 'Third', rationale: 'Revision again' }, 1, researcher);
+  // Legacy events have no explicit snapshot pointers; retain the conservative
+  // reconstruction behavior when their intermediate inputs are unavailable.
+  for (const event of state.events) { delete event.beforeSnapshotHash; delete event.afterSnapshotHash; }
   const withoutBaseline = structuredClone(state);
   withoutBaseline.snapshots.shift();
   assert.ok(buildReplaySteps(withoutBaseline).every(step => step.availability === 'summary_only' && step.changes.length === 0));
@@ -74,6 +77,7 @@ test('missing baseline or intermediate snapshot yields summaries and no invented
 test('ambiguous successor snapshots and event gaps are never resolved by arbitrary selection', () => {
   const store = new ReviewStore({ initial: { projectId: 'project', title: 'Review' } });
   const state = store.act({ type: 'create_claim', text: 'Claim', scope: 'sample', rationale: 'New' }, 0, researcher);
+  for (const event of state.events) { delete event.beforeSnapshotHash; delete event.afterSnapshotHash; }
   const ambiguous = structuredClone(state);
   const extra = structuredClone(ambiguous.snapshots[1]!);
   extra.hash = 'a'.repeat(64);
@@ -84,6 +88,36 @@ test('ambiguous successor snapshots and event gaps are never resolved by arbitra
   const gap = structuredClone(state);
   gap.events[1]!.revision = 2;
   assert.equal(buildReplaySteps(gap)[1]!.availability, 'summary_only');
+});
+
+test('new bound events replay relationship, partial revision, evidence mapping and local review without guessing IDs', () => {
+  const store = new ReviewStore({initial:{projectId:'closed-loop',title:'Synthetic loop'}});
+  let state=store.getState();
+  const act=(action:unknown, actor:typeof researcher|typeof agent=researcher)=>state=store.act(action,state.revision,actor);
+  act({type:'create_claim',text:'Synthetic premise',scope:'population',rationale:'Fixture'});
+  act({type:'create_claim',text:'Synthetic downstream',scope:'sample',rationale:'Fixture'});
+  const [up,down]=state.claims.map(claim=>claim.id);
+  act({type:'attach_evidence',claimId:up,name:'synthetic.txt',mediaType:'text/plain',content:'Synthetic source'});
+  act({type:'add_claim_relation',sourceClaimId:up,targetClaimId:down,kind:'depends_on',rationale:'Fixture dependency'});
+  act({type:'add_finding',claimId:up,title:'Candidate revision',rationale:'Synthetic candidate',severity:'warning',category:'claim_scope',snapshotHash:state.snapshotHash,resourceIds:[],revisionProposal:{text:'Scoped synthetic premise',scope:'sample',evidenceNeeds:[{id:'n',category:'replication',description:'Independent replication'}]}}, agent);
+  const findingId=state.findings.at(-1)!.id;
+  act({type:'apply_revision_proposal',findingId,acceptText:true,acceptScope:false,evidenceNeedIds:['n'],rationale:'Select text and plan'});
+  act({type:'link_evidence_requirement',claimId:up,requirementId:`proposal:${findingId}:n`,resourceIds:state.claims[0].resourceIds,rationale:'Link test material only'});
+  act({type:'apply_revision_proposal',findingId,acceptText:false,acceptScope:true,evidenceNeedIds:[],rationale:'Select remaining scope'});
+  act({type:'set_claim_disposition',claimId:up,disposition:'rejected',rationale:'Reject premise'});
+  act({type:'acknowledge_re_review',claimId:down,rationale:'Rechecked dependence'});
+  act({type:'remove_claim_relation',relationId:state.claimRelations![0].id,rationale:'Remove obsolete dependency'});
+  const steps=buildReplaySteps(state);
+  assert.ok(steps.every(step=>step.availability==='complete'),JSON.stringify(steps.filter(step=>step.availability!=='complete')));
+  assert.match(steps.find(step=>step.title==='提交审阅建议')!.changes.at(-1)!.after!,/Scoped synthetic premise/);
+  const adoptions=steps.filter(step=>step.title==='逐项采纳修订提案');
+  assert.deepEqual(adoptions[0].changes.map(change=>change.label),['论断内容','补证计划 · replication']);
+  assert.deepEqual(adoptions[1].changes,[{label:'论断范围',before:'population',after:'sample'}]);
+  assert.equal(steps.find(step=>step.title==='移除论断关系')!.changes[0].before,'依赖');
+  const missing=structuredClone(state); missing.snapshots.splice(1,1);
+  const recovered=buildReplaySteps(missing);
+  assert.equal(recovered[1].availability,'summary_only');
+  assert.equal(recovered.at(-1)!.availability,'complete','Later explicit event anchors may recover exact available inputs');
 });
 
 test('pause, resume, review, suggestions and interventions remain faithful action summaries', () => {
@@ -99,7 +133,8 @@ test('pause, resume, review, suggestions and interventions remain faithful actio
   assert.match(steps[1]!.changes[0]!.after!, /Question the design/);
   assert.deepEqual(steps[2]!.changes[0], { label: '审查状态', before: 'active', after: 'paused' });
   assert.deepEqual(steps[3]!.changes[0], { label: '审查状态', before: 'paused', after: 'active' });
-  assert.equal(steps[4]!.availability, 'summary_only');
+  assert.equal(steps[4]!.availability, 'complete');
+  assert.equal(steps[4]!.changes[0]!.label, '本轮规则检查报告');
   assert.equal(steps[5]!.availability, 'complete');
   assert.equal(steps[5]!.changes[0]!.after, 'Proposed concern');
   assert.equal(steps[5]!.actor.kind, 'agent');

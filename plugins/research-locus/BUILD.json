@@ -4,8 +4,19 @@
   "runtimeDependencyInstallRequired": false,
   "nativeHostAcceptance": "NOT_RUN",
   "sha256": {
-    "dist/server.js": "2dda35f8666c43a99bccbdcade8874d169032ee5046ab174fef8346f8e9f0a74",
-    "dist/app.html": "c60332da9bc138c078da57db4ad6d6617e4ccbb22603890e4c2bc7cb3b2ffed8",
-    "scripts/launch.mjs": "2233614567cfe1b4fc2bc1a0707cd42d31b3b3443f35d2aef9e336a2337a818d"
+    "dist/server.js": "87c74eb4b27e8ca95cdca0ac689226227c56bd2c9ec2cd7c04b07cdb0424ff08",
+    "dist/app.html": "3896b2ed4ca6401efdba43e0c16cefc81c4ee9bc3e6575f592b39fac2262d4c3",
+    "scripts/launch.mjs": "2233614567cfe1b4fc2bc1a0707cd42d31b3b3443f35d2aef9e336a2337a818d",
+    "scripts/package-computational-receipt.mjs": "45c51ca33c7f168643cc08648e1e54fcd602b7fbab385994bbb16f3c6d7e1bbb",
+    "skills/co-review/SKILL.md": "3498d0c632626edce788828042abba8a136ee29dbb4a344b2e97dd0e759632be",
+    "skills/co-review/assets/review-summary.md": "427f84f7fdf9d9c1e4467d52730ce42368d32d375915bba07cc159a24dbeaa74",
+    "skills/co-review/references/co-improvement.md": "1988f3233908bb8fabc7b9aa679c49092e881d13c4081f5c2d644d770f02eb8b",
+    "skills/co-review/references/computational-evidence.md": "6369f7f4b858b09fdb5f6ae19e2f835e2d5ea5dfbd81ffc7712dfaf022121766",
+    "skills/co-review/references/design-extraction.md": "9eaacac8810dbc85148a57908457b82ea684855d16ea070f1524ad92d392c315",
+    "skills/co-review/references/interaction.md": "3c08224274f14ae475e03c04c4831f52a2dc08c4397cc5ae2ba44b266314b9c9",
+    "skills/co-review/references/metadata-checks.md": "bf1ec5da374b032715c5e1f9b093552cae7824049149112a4c14a49b43f2c276",
+    "skills/co-review/references/review-methods.md": "7a401345368d4cfe861c3c679b4fcabe7278fea1ce9c149e416d62eab3c72ab6",
+    "skills/co-review/references/tool-contracts.md": "9124769dce6026b90623cd3256303d69aa081bd8fa5bd4d9b5cf3a7ea17fd99d",
+    "skills/co-review/scripts/validate-finding.mjs": "933819a4af07bc3dc988a72dec844e00375fec042b711a5ab3afe7f9aa8f0529"
   }
 }
